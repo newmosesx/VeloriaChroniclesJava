@@ -1,0 +1,23 @@
+package example.practice.config;
+
+public enum Rebellion {
+    REBELLIONTHRESHOLD(2000),
+    DISSENTTHRESHOLD(100),
+    HOURLYUNRESTDECAYCHANCE(24),
+    WELLFEDUNRESTREDUCTION(1),
+    UNRESTGAINFROMTAXES(12),
+    UNABLETOPAYTAX(8),
+    UNRESTGAINFROMFAMINE(10),
+    MAXNEWREBELSPERDAY(200),
+    REBELCHANCEDIVISOR(5000),
+    MAXUNRESTFORREBELCONVERSION(4000),
+    REBELLEADERSPAWNCHANCE(2),
+    SOLDIERDEFECTIONCHANCE(0.9f);
+
+    public final float value;
+
+    Rebellion(float value){
+        this.value = value;
+    }
+}
+
