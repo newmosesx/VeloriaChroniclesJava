@@ -1,7 +1,8 @@
+// --- START OF FILE InitialKingdomResources.java ---
 package example.practice.config;
 
 public enum InitialKingdomResources {
-    INITIAL_EMPIRE_FOOD(800000),
+    INITIAL_EMPIRE_FOOD(30000000), // <--- Increased to 30 Million!
     INITIAL_EMPIRE_WOOD(1000),
     INITIAL_EMPIRE_STONE(1000),
     INITIAL_EMPIRE_METAL(500),
@@ -18,4 +19,3 @@ public enum InitialKingdomResources {
         this.value = value;
     }
 }
-

@@ -1,27 +1,10 @@
 package example.practice;
 
-import java.util.Scanner;
-import example.practice.user.UserStructure;
-
+import example.practice.gui.MainGUI;
 
 public class Main {
-
-    static void welcomeMessage(){
-        System.out.println(
-                "Welcome."+"\\"+
-                "We hope you enjoy the the game");
-    }
-
-    public static void main(String[] args){
-        Scanner input = new Scanner(System.in);
-
-        System.out.println("Enter Your Name: ");
-        String userName = input.next();
-        System.out.println();
-
-        UserStructure Player = new UserStructure(userName);
-
-
-
+    public static void main(String[] args) {
+        // This is a trick to bypass JavaFX module checks
+        MainGUI.main(args);
     }
 }
