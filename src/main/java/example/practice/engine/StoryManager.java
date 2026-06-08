@@ -10,7 +10,6 @@ import java.util.List;
 import static example.practice.logger.Logger.LogCategory.STORY;
 
 public class StoryManager {
-    // Flags to ensure story events only trigger once
     private static boolean ch1_p3 = false;
     private static boolean ch1_p7 = false;
     private static boolean ch1_p9 = false;
@@ -34,7 +33,7 @@ public class StoryManager {
             }
             else if (paragraphIndex == 9 && !ch1_p9) {
                 Logger.logEvent("STORY: The discovery of created monsters terrifies the people!", STORY);
-                kingdom.armyMorale -= 2;
+                kingdom.modifyMorale(-2); // FIX: clamped, not raw armyMorale -= 2
                 kingdom.unrestLevel += 5;
                 addPeopleWithJob(population, kingdom.id, Military.REBEL.value, 30);
                 ch1_p9 = true;
@@ -44,17 +43,17 @@ public class StoryManager {
             if (paragraphIndex == 0 && !ch8_p0) {
                 Logger.logEvent("STORY: A new charismatic Rebel Leader emerges in the North!", STORY);
                 kingdom.unrestLevel += 100;
-                addPeopleWithJob(population, kingdom.id, Military.REBEL.value, 1200); // Massive recruitment
-                kingdom.setSkirmishControl(-1, 1.0f); // Halt random skirmishes for the story
+                addPeopleWithJob(population, kingdom.id, Military.REBEL.value, 1200);
+                kingdom.setSkirmishControl(-1, 1.0f); // halt random skirmishes for the story
                 ch8_p0 = true;
             }
             else if (paragraphIndex >= 1 && paragraphIndex <= 12 && !ch8_p12) {
-                kingdom.setSkirmishControl(-1, 1.0f); // Continue pausing
+                kingdom.setSkirmishControl(-1, 1.0f); // keep them paused through the build-up
                 ch8_p12 = true;
             }
             else if (paragraphIndex >= 13 && paragraphIndex <= 26 && !ch8_p26) {
-                // Scripted historical battle
                 CombatManager.forceSkirmish(kingdom, population, 360, 480);
+                kingdom.setSkirmishControl(0, 1.0f); // FIX: resume normal skirmishes after the scripted battle
                 ch8_p26 = true;
             }
         }

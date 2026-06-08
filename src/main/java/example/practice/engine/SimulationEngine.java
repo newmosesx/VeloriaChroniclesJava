@@ -1,7 +1,9 @@
 package example.practice.engine;
 
+import example.practice.agents.AgentRoster;
 import example.practice.config.DailyBatch;
 import example.practice.config.ProductionCost;
+import example.practice.events.EventSystem;
 import example.practice.humans.Human;
 import example.practice.kingdoms.Kingdom;
 import example.practice.config.Population;
@@ -13,7 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static example.practice.logger.Logger.LogCategory.NATURAL;
+import example.practice.world.World;
 
 public class SimulationEngine implements Runnable {
     private List<Human> worldPopulation;
@@ -21,8 +23,10 @@ public class SimulationEngine implements Runnable {
     private boolean isRunning = true;
     private Player player;
 
-    private final ReentrantLock dataLock = new ReentrantLock();
+    public World world = new World();             // with the other fields
+    public World getWorld() { return world; }
 
+    private final ReentrantLock dataLock = new ReentrantLock();
 
     public List<Human> getWorldPopulation() { return worldPopulation; }
 
@@ -34,6 +38,9 @@ public class SimulationEngine implements Runnable {
     private int hour = 0;
 
     public ShareData sharedData = new ShareData();
+
+    public final AgentRoster roster = AgentRoster.seedDefault();
+    public AgentRoster getRoster() { return roster; }
 
     public SimulationEngine() {
         this.worldPopulation = new ArrayList<>();
@@ -139,7 +146,7 @@ public class SimulationEngine implements Runnable {
         if (hour >= (int)ProductionCost.WORKSTARTHOUR.value && hour < (int) ProductionCost.WORKENDHOUR.value) {
             for (Kingdom k : kingdoms) {
                 if (k.isActive) {
-                    EconomyManager.occupation(currentShift); // Sweep unemployed humans
+                    EconomyManager.occupation(currentShift);
                     EconomyManager.processBatchNeeds(k, currentShift);
                 }
             }
@@ -163,6 +170,7 @@ public class SimulationEngine implements Runnable {
     }
 
     private void processDay() {
+        world.advanceDay();
         DailyEventTracker.resetDailyFlags();
 
         RebellionManager.checkEmpireCollapse(kingdoms, worldPopulation);
@@ -171,25 +179,20 @@ public class SimulationEngine implements Runnable {
         for (Kingdom k : kingdoms) {
             if (k.isActive) {
                 k.collectTaxes(worldPopulation);
-                PopulationManager.processPopulationChanges(k, worldPopulation);
+                SubsistenceManager.process(k, worldPopulation, world);
+                EdictManager.processDaily(k, worldPopulation);
+                PoliticsManager.process(k, worldPopulation, world);
                 RebellionManager.handleRecruitmentAndDissent(k, worldPopulation);
-                AIManager.runEmpireAI(k, worldPopulation);
                 k.tickDivinePenalty();
                 k.updateDailyMorale();
-                k.recruitSoldiers(worldPopulation);
-                EventManager.triggerRandomEvent(k, worldPopulation);
-
-                if (k.divinePenaltyTimerDays > 0) {
-                    k.divinePenaltyTimerDays--;
-                    if (k.divinePenaltyTimerDays == 0) {
-                        k.divineProductionModifier = 1.0f;
-                        k.divineTaxModifier = 1.0f;
-                        Logger.logEvent("Divine penalty expired for " + k.name, NATURAL);
-                    }
-                }
+                if (ManpowerManager.canRecruit(k, worldPopulation)) k.recruitSoldiers(worldPopulation);
+                EventSystem.process(k, worldPopulation, world, day);
+                ManpowerManager.process(k, worldPopulation);
+                roster.tick();
             }
         }
 
+        TechManager.processDaily();
         PopulationManager.compactDeadHumans(worldPopulation);
 
         for (Kingdom k : kingdoms) {
@@ -198,4 +201,9 @@ public class SimulationEngine implements Runnable {
             }
         }
     }
+
+    public int getDay() { return day; }
+    public int getHour() { return hour; }
+    public void setDayHour(int d, int h) { this.day = d; this.hour = h; }
+
 }

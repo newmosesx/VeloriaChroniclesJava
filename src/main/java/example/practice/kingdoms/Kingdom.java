@@ -15,7 +15,7 @@ public class Kingdom {
     public boolean isActive;
     public boolean limitersDisabled = false;
 
-    public int food, wood, stone, metal, weapons, treasury, armyMorale;
+    public int food, wood, stone, metal, weapons, gold, armyMorale;
 
     public int storySkirmishOverride;
     public float storySkirmishChanceModifier = 1.0f;
@@ -29,6 +29,8 @@ public class Kingdom {
 
     public int[] jobCounts = new int[10];
 
+    public KingdomArchetype archetype;
+
     public Kingdom(int id, String name, boolean isActive) {
         this.id = id;
         this.name = name;
@@ -38,7 +40,7 @@ public class Kingdom {
         this.wood = (int) InitialKingdomResources.INITIAL_EMPIRE_WOOD.value;
         this.stone = (int) InitialKingdomResources.INITIAL_EMPIRE_STONE.value;
         this.metal = (int) InitialKingdomResources.INITIAL_EMPIRE_METAL.value;
-        this.treasury = (int) InitialKingdomResources.INITIAL_EMPIRE_TREASURY.value;
+        this.gold = (int) InitialKingdomResources.INITIAL_EMPIRE_TREASURY.value;
         this.armyMorale = (int) InitialKingdomResources.INITIAL_EMPIRE_MORALE.value;
     }
 
@@ -145,7 +147,7 @@ public class Kingdom {
         if (this.divinePenaltyTimerDays > 0) {
             totalTaxCollected = (int) (totalTaxCollected * this.divineTaxModifier);
         }
-        this.treasury += totalTaxCollected;
+        this.gold += totalTaxCollected;
         this.unrestLevel += (int) Rebellion.UNRESTGAINFROMTAXES.value;
     }
 

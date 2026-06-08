@@ -35,7 +35,7 @@ public class RebellionManager {
             if (isSoldier) {
                 int defectionChance = (int) (unrestOverThreshold * Rebellion.SOLDIERDEFECTIONCHANCE.value);
                 if ((Math.random() * Rebellion.REBELCHANCEDIVISOR.value) < defectionChance) {
-                    kingdom.armyMorale -= 5;
+                    kingdom.modifyMorale(-5); // FIX: route through the clamp, not raw armyMorale -= 5
                     h.job = Military.REBEL.value;
                     becameRebel = true;
                 }
@@ -55,11 +55,21 @@ public class RebellionManager {
         }
     }
 
+    public static boolean isMilitarilyOverwhelmed(Kingdom kingdom, List<Human> population) {
+        if (kingdom.id != 0 || !kingdom.isActive) return false;
+        int soldiers = 0, rebels = 0;
+        for (Human h : population) {
+            if (!h.isAlive || h.kingdomId != kingdom.id) continue;
+            if (h.job >= 6 && h.job <= 8) soldiers++;
+            else if (h.job >= 9) rebels++;
+        }
+        return rebels >= 6 * Math.max(1, soldiers); // 6:1 or worse — the army can't hold
+    }
+
     public static void checkCivilWarTrigger(Kingdom[] kingdoms, List<Human> population, ShareData sharedData) {
         long totalSoldiers = population.stream().filter(h -> h.isAlive && h.job >= 6 && h.job <= 8).count();
         long totalRebels = population.stream().filter(h -> h.isAlive && h.job == 9).count();
 
-        // Condition: Rebels > 100 AND Rebels > 75% of Army (From C: civil_war.c)
         if (totalRebels > CivilWar.CIVIL_WAR_MINIMUM_REBELS.value &&
                 totalRebels > (totalSoldiers * CivilWar.CIVIL_WAR_REBEL_TO_SOLDIER_RATIO.value)) {
             sharedData.civilWarStatus = "Status: CIVIL WAR ERUPTS";
@@ -72,26 +82,19 @@ public class RebellionManager {
 
     public static void checkEmpireCollapse(Kingdom[] kingdoms, List<Human> population) {
         Kingdom empire = kingdoms[0];
-        if (empire.isActive && empire.unrestLevel >= Rebellion.REBELLIONTHRESHOLD.value) {
-            Logger.logEvent("!!! THE EMPIRE HAS FALLEN !!!", STORY);
+        if (!empire.isActive) return;
+
+        boolean unrestCollapse = empire.unrestLevel >= Rebellion.REBELLIONTHRESHOLD.value;
+        boolean overwhelmed = isMilitarilyOverwhelmed(empire, population);
+
+        if (unrestCollapse || overwhelmed) {
+            Logger.logEvent(overwhelmed && !unrestCollapse
+                    ? "!!! THE LEGIONS ARE OVERWHELMED - THE EMPIRE HAS FALLEN !!!"
+                    : "!!! THE EMPIRE HAS FALLEN !!!", STORY);
             empire.isActive = false;
 
-            // Activate successor kingdoms
-            for (int i = 1; i < kingdoms.length; i++) {
-                kingdoms[i].isActive = true;
-                kingdoms[i].unrestLevel = 0;
-                kingdoms[i].food = 500; // Starting resources for new kingdoms
-            }
-
-            // Reassign the people
-            for (Human h : population) {
-                if (h.isAlive) {
-                    h.kingdomId = (int) (Math.random() * 7) + 1; // Assign to IDs 1-7
-                    if (h.job == Military.REBEL.value || h.job > 5) {
-                        h.job = 1; // Former rebels and soldiers become farmers in the new world
-                    }
-                }
-            }
+            EmpireAshes ashes = SuccessorSeeder.captureAshes(empire, population);
+            SuccessorSeeder.seedSuccessors(kingdoms, population, ashes);
         }
     }
 }

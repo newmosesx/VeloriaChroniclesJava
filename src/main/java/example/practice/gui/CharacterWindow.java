@@ -27,6 +27,9 @@ public class CharacterWindow {
         layout.setAlignment(Pos.TOP_CENTER);
         layout.setStyle("-fx-background-color: #191919; -fx-border-color: #3c3c3c; -fx-border-width: 2px;");
 
+        // Portrait (real image if the file exists, lettered circle otherwise)
+        javafx.scene.Node portrait = Portraits.avatar(cd.name, 160);
+
         Label nameLbl = new Label(cd.name);
         nameLbl.setStyle("-fx-text-fill: #ffffff; -fx-font-size: 24px; -fx-font-weight: bold;");
 
@@ -42,10 +45,10 @@ public class CharacterWindow {
         closeButton.setStyle("-fx-background-color: #292929; -fx-text-fill: #dddddd; -fx-border-color: #444444; -fx-border-radius: 4;");
         closeButton.setOnAction(e -> window.close());
 
-        layout.getChildren().addAll(nameLbl, titleLbl, new Separator(), descLbl, new Region(), closeButton);
-        VBox.setVgrow(layout.getChildren().get(4), Priority.ALWAYS); // Push close button to bottom
+        layout.getChildren().addAll(portrait, nameLbl, titleLbl, new Separator(), descLbl, new Region(), closeButton);
+        VBox.setVgrow(layout.getChildren().get(5), Priority.ALWAYS); // Push close button to bottom
 
-        Scene scene = new Scene(layout, 400, 350);
+        Scene scene = new Scene(layout, 400, 540);
         window.setScene(scene);
         window.showAndWait();
     }

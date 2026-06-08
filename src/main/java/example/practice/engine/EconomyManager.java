@@ -3,18 +3,26 @@ package example.practice.engine;
 import example.practice.humans.Human;
 import example.practice.kingdoms.Kingdom;
 import example.practice.config.*;
-import example.practice.logger.Logger;
 
 import java.util.List;
 
+// Food and population are owned entirely by SubsistenceManager. EconomyManager
+// keeps the rest: assigning work, the hourly grind that produces wood/stone/metal
+// and wears people down, and pay. It no longer touches kingdom.food.
 public class EconomyManager {
 
-    // --- OCCUPATION SWEEP ---
     public static void occupation(List<Human> batch) {
         for (Human h : batch) {
-            // Unemployed individuals randomly get a job from 1 to 8 (Civilian or Military)
             if (h.isAlive && h.job == 0) {
-                h.job = (int)(Math.random() * 8) + 1;
+                int r = (int) (Math.random() * 100);
+                if (r < 45) h.job = 1;        // farmer
+                else if (r < 55) h.job = 2;   // butcher
+                else if (r < 68) h.job = 3;   // lumberjack
+                else if (r < 81) h.job = 4;   // miner
+                else if (r < 90) h.job = 5;   // blacksmith
+                else if (r < 95) h.job = 6;   // swordsman
+                else if (r < 98) h.job = 7;   // archer
+                else h.job = 8;               // cavalry
             }
         }
     }
@@ -22,17 +30,16 @@ public class EconomyManager {
     public static void processBatchNeeds(Kingdom kingdom, List<Human> batch) {
         if (!kingdom.isActive) return;
 
-        int foodProduced = 0, woodProduced = 0, stoneProduced = 0, metalProduced = 0, weaponsProduced = 0;
-        boolean famineTriggered = false;
+        int woodProduced = 0, stoneProduced = 0, metalProduced = 0;
 
         for (Human h : batch) {
             if (!h.isAlive || h.kingdomId != kingdom.id) continue;
 
             if (h.health > 10) {
-                if ((int)(Math.random() * 2) == 1) {
+                if ((int) (Math.random() * 2) == 1) {
                     switch (h.job) {
-                        case 1: foodProduced += (int)(Math.random() * (ProductionCost.FARMERFOODPRODUCTION.value)); h.health -= 5; h.hunger -= 10; break;
-                        case 2: foodProduced += (int)(Math.random() * (ProductionCost.BUTCHERPRODUCTION.value)); h.health -= 10; h.hunger -= 15; break;
+                        case 1: h.health -= 5;  h.hunger -= 10; break; // farmer  (food: daily)
+                        case 2: h.health -= 10; h.hunger -= 15; break; // butcher (food: daily)
                         case 3: woodProduced += (int)(Math.random() * (ProductionCost.LUMBERJACKPRODUCTION.value)) + 1; h.health -= 15; h.hunger -= 20; break;
                         case 4:
                             if (Math.random() * 100 < ProductionCost.MINERPRODUCTIONCHANCE.value)
@@ -50,47 +57,14 @@ public class EconomyManager {
                     }
                 } else { h.health += 20; }
             } else { h.health += 5; }
-
-            if (h.job != Military.REBEL.value) {
-                if (kingdom.food > 1) {
-                    if (h.hunger <= (int)ProductionCost.EATHUNGERTHRESHOLD.value) {
-                        if (h.bronze >= (int)ProductionCost.FOODCOST.value) {
-                            h.bronze -= (int)ProductionCost.FOODCOST.value;
-                            int eatingAmount = 2;
-                            if (h.job >= 6 && h.job <= 8) eatingAmount += (int)Combat.MILITARY_EXTRA_FOOD_CONSUMPTION.value;
-                            kingdom.food -= eatingAmount;
-                            h.hunger += (int)(Math.random() * 40) + 10;
-                        } else { h.health -= 5; }
-                    }
-                } else {
-                    if (!famineTriggered) {
-                        // --- FAMINE METRIC LOGGING ---
-                        int famineDeaths = Math.max(1, (int)(kingdom.population * (ProductionCost.FAMINEPOPULATIONLOSSPERCENT.value / 100.0f)));
-                        if (!DailyEventTracker.famineLogged) {
-                            Logger.logEvent("!!! FAMINE in " + kingdom.name + " !!!", Logger.LogCategory.NATURAL);
-                            Logger.logEvent(" -> " + famineDeaths + " people have died from starvation!", Logger.LogCategory.NATURAL);
-                            DailyEventTracker.famineLogged = true;
-                        }
-
-                        kingdom.unrestLevel += (int)Rebellion.UNRESTGAINFROMFAMINE.value;
-                        kingdom.food = 0;
-                        famineTriggered = true;
-                    }
-                    if (h.hunger > 0) { h.hunger -= 10; }
-                    else if (h.hunger < 0) { h.isAlive = false; }
-                }
-            }
         }
 
-        float prodMod = kingdom.storyProductionModifier * kingdom.divineProductionModifier;
-        kingdom.food += (int)(foodProduced * prodMod);
+        // Industry tech (improved tools) lifts wood/stone/metal yield.
+        float prodMod = kingdom.storyProductionModifier * kingdom.divineProductionModifier
+                * (1f + TechManager.bonus(TechEffect.RESOURCE));
         kingdom.wood += (int)(woodProduced * prodMod);
         kingdom.stone += (int)(stoneProduced * prodMod);
         kingdom.metal += (int)(metalProduced * prodMod);
-
-        if (kingdom.storyFoodDailyCap > 0 && kingdom.food > kingdom.storyFoodDailyCap) {
-            kingdom.food = kingdom.storyFoodDailyCap;
-        }
     }
 
     public static void distributePayments(List<Human> batch) {

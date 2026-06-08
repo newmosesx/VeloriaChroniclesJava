@@ -73,4 +73,11 @@ public class Logger {
     public static synchronized boolean hasUpdates(LogCategory category) {
         return readIndices.get(category) < categorizedLogs.get(category).size();
     }
+
+    public static synchronized String peek(LogCategory category) {
+        LinkedList<LogEntry> logs = categorizedLogs.get(category);
+        StringBuilder sb = new StringBuilder();
+        for (LogEntry e : logs) sb.append(e.message).append("\n");
+        return sb.toString();
+    }
 }

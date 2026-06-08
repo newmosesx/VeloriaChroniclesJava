@@ -18,20 +18,21 @@ public class CombatManager {
         Battalion(float h, float d, float def, int c) {
             this.initialCount = c;
             this.health = h;
+            this.damage = d;
+            this.defense = def;
             if (c > 0) {
                 this.hltPerPerson = h / c;
                 this.dmgPerPerson = d / c;
                 this.defPerPerson = def / c;
             }
         }
-        int getEffectiveCount() { return (int) Math.ceil(health / hltPerPerson); }
+        int getEffectiveCount() { return hltPerPerson > 0 ? (int) Math.ceil(health / hltPerPerson) : 0; }
         float getEffectiveDamage() { return getEffectiveCount() * dmgPerPerson; }
         float getEffectiveDefense() { return getEffectiveCount() * defPerPerson; }
     }
 
-    // --- SCRIPTED STORY BATTLES (Matches C code: run_battle in civil_war.c) ---
+    // --- SCRIPTED STORY BATTLES (unchanged) ---
     public static void forceSkirmish(Kingdom kingdom, List<Human> population, int imperialCombatants, int rebelCombatants) {
-        // [Unchanged from previous update - omitted for brevity, but stays here]
         if (imperialCombatants <= 0 || rebelCombatants <= 0) return;
 
         int generalCount = 0;
@@ -51,13 +52,12 @@ public class CombatManager {
         if (generalCount > 0) {
             for (int i = 0; i < generalCount; i++) imperialStrength *= Combat.GENERAL_COMBAT_BONUS.value;
         }
-
         if (rebelLeaderCount > 0) {
             for (int i = 0; i < rebelLeaderCount; i++) rebelStrength *= Combat.REBEL_LEADER_COMBAT_BONUS.value;
         }
 
-        int imperialCasualties = 0;
-        int rebelCasualties = 0;
+        int imperialCasualties;
+        int rebelCasualties;
         String winnerTitle;
 
         if (imperialStrength > rebelStrength) {
@@ -93,29 +93,9 @@ public class CombatManager {
         if ((Math.random() * 100) > chance) return;
         kingdom.storySkirmishOverride = 0;
 
-        Battalion soldiersFull = new Battalion(0,0,0,0);
-        Battalion rebelsFull = new Battalion(0,0,0,0);
+        Battalion soldiersFull = new Battalion(0, 0, 0, 0);
+        Battalion rebelsFull   = new Battalion(0, 0, 0, 0);
         int generals = 0, rebelLeaders = 0;
-
-        int sCount = (int)(soldiersFull.initialCount * Battle.SOLDIERS_IN_SKIRMISH.value);
-        int rCount = (int)(rebelsFull.initialCount * Battle.REBELS_IN_SKIRMISH.value);
-
-        // Prevent ghost battles (0 vs X)
-        if (sCount <= 0 || rCount <= 0) return;
-
-        Battalion sBatch = new Battalion(
-                soldiersFull.health * Battle.SOLDIERS_IN_SKIRMISH.value,
-                soldiersFull.damage * Battle.SOLDIERS_IN_SKIRMISH.value,
-                soldiersFull.defense * Battle.SOLDIERS_IN_SKIRMISH.value,
-                (int)(soldiersFull.initialCount * Battle.SOLDIERS_IN_SKIRMISH.value)
-        );
-
-        Battalion rBatch = new Battalion(
-                rebelsFull.health * Battle.REBELS_IN_SKIRMISH.value,
-                rebelsFull.damage * Battle.REBELS_IN_SKIRMISH.value,
-                rebelsFull.defense * Battle.REBELS_IN_SKIRMISH.value,
-                (int)(rebelsFull.initialCount * Battle.REBELS_IN_SKIRMISH.value)
-        );
 
         for (Human h : population) {
             if (!h.isAlive || h.kingdomId != kingdom.id) continue;
@@ -128,81 +108,93 @@ public class CombatManager {
             }
         }
 
-        float sDmg = sBatch.getEffectiveDamage();
+        int sCount = (int)(soldiersFull.initialCount * Battle.SOLDIERS_IN_SKIRMISH.value);
+        int rCount = (int)(rebelsFull.initialCount   * Battle.REBELS_IN_SKIRMISH.value);
+        if (sCount <= 0 || rCount <= 0) return;
+
+        Battalion sBatch = new Battalion(
+                soldiersFull.health  * Battle.SOLDIERS_IN_SKIRMISH.value,
+                soldiersFull.damage  * Battle.SOLDIERS_IN_SKIRMISH.value,
+                soldiersFull.defense * Battle.SOLDIERS_IN_SKIRMISH.value,
+                sCount);
+
+        Battalion rBatch = new Battalion(
+                rebelsFull.health  * Battle.REBELS_IN_SKIRMISH.value,
+                rebelsFull.damage  * Battle.REBELS_IN_SKIRMISH.value,
+                rebelsFull.defense * Battle.REBELS_IN_SKIRMISH.value,
+                rCount);
+
+        // Military tech: drill sharpens the blow, fortification softens the one taken.
+        float offTech = 1f + TechManager.bonus(TechEffect.OFFENSE);
+        float defTech = 1f + TechManager.bonus(TechEffect.DEFENSE);
+
+        float sDmg = sBatch.getEffectiveDamage() * offTech;
         float rDmg = rBatch.getEffectiveDamage();
-        if (generals > 0) sDmg *= (1.0f + (Combat.GENERAL_COMBAT_BONUS.value - 1.0f) * generals);
+        if (generals > 0)     sDmg *= (1.0f + (Combat.GENERAL_COMBAT_BONUS.value - 1.0f) * generals);
         if (rebelLeaders > 0) rDmg *= (1.0f + (Combat.REBEL_LEADER_COMBAT_BONUS.value - 1.0f) * rebelLeaders);
 
         Logger.logEvent("SKIRMISH! " + sBatch.initialCount + " Imperials vs " + rBatch.initialCount + " Rebels.", MILITARY);
 
         int residualSoldierCount = sBatch.initialCount;
-        int residualRebelCount = rBatch.initialCount;
-        int battleState = 3; // 3 means continue
+        int residualRebelCount   = rBatch.initialCount;
+        int battleState = 3; // 3 = continue
 
-        // Tactical Loop with C's declareResult logic
         while (battleState == 3) {
-            // Surprise Attack
-            sBatch.health -= (rDmg * Combat.ELEMENT_OF_SURPRISE.value);
+            // Surprise attack (fortification tech reduces what the soldiers take)
+            sBatch.health -= (rDmg * Combat.ELEMENT_OF_SURPRISE.value) / defTech;
 
-            // Tank Mode
+            // Tank mode
             float currentDef = sBatch.getEffectiveDefense();
             if (sBatch.health < (sBatch.hltPerPerson * sBatch.initialCount) * 0.5) {
                 sBatch.health += (currentDef * 0.5f);
                 currentDef *= 0.5f;
             }
 
-            // Soldiers Strike
+            // Soldiers strike
             if (rBatch.getEffectiveDefense() < (sDmg * Combat.ORGANIZED_COMMAND.value)) {
                 rBatch.health -= ((sDmg * Combat.ORGANIZED_COMMAND.value) - rBatch.getEffectiveDefense());
             } else {
                 rBatch.health -= sDmg;
             }
 
-            // Evaluate state
             battleState = declareResult(rBatch.getEffectiveCount(), sBatch.getEffectiveCount(), residualRebelCount, residualSoldierCount);
         }
 
         int sLoss = residualSoldierCount - sBatch.getEffectiveCount();
-        int rLoss = residualRebelCount - rBatch.getEffectiveCount();
+        int rLoss = residualRebelCount   - rBatch.getEffectiveCount();
         kingdom.inflictProportionalCasualties(population, kingdom.id, Math.max(0, sLoss), Math.max(0, rLoss));
 
-        if (sLoss > rLoss) {
-            kingdom.armyMorale -= (int)Battle.MORALE_LOSS_ON_DEFEAT.value;
-            Logger.logEvent("The Empire suffered a setback.", MILITARY);
+        // FIX: morale and the summary now follow who actually held the field (the same
+        // effective-count test declareResult used), so a victory can no longer also
+        // log "suffered a setback". One coherent outcome per skirmish.
+        boolean empireHeldField = sBatch.getEffectiveCount() >= rBatch.getEffectiveCount();
+        if (empireHeldField) {
+            kingdom.modifyMorale((int) Battle.MORALE_GAIN_ON_VICTORY.value);
         } else {
-            kingdom.armyMorale += (int)Battle.MORALE_GAIN_ON_VICTORY.value;
-            // Only log if it was an actual large suppression to prevent bloat
-            if (sBatch.initialCount > 10) {
-                Logger.logEvent("A local rebellion was suppressed.", MILITARY);
-            }
+            kingdom.modifyMorale(-(int) Battle.MORALE_LOSS_ON_DEFEAT.value);
+            Logger.logEvent("The Empire suffered a setback.", MILITARY);
         }
-
-        kingdom.modifyMorale(sLoss > rLoss ? -(int)Battle.MORALE_LOSS_ON_DEFEAT.value : (int)Battle.MORALE_GAIN_ON_VICTORY.value);
-
-        if (kingdom.armyMorale < 0 && !kingdom.limitersDisabled) kingdom.armyMorale = 0;
-        if (kingdom.armyMorale > 100 && !kingdom.limitersDisabled) kingdom.armyMorale = 100;
     }
 
-    // --- BATTLE RESOLUTION STATE MACHINE (From unrest.c) ---
+    // --- BATTLE RESOLUTION STATE MACHINE (unchanged) ---
     private static int declareResult(int rebelCount, int soldierCount, int residualRebelCount, int residualSoldierCount) {
         if (soldierCount <= 0 && rebelCount <= 0) {
             Logger.logEvent("The battle ended with no victor.. Just blood..", MILITARY);
-            return 2; // End battle
+            return 2;
         }
-
         if (soldierCount >= rebelCount) {
             if (rebelCount >= residualSoldierCount * 0.2 && soldierCount < residualSoldierCount * 0.3) {
-                return 3; // Continue battle
+                return 3;
             } else {
                 Logger.logEvent("Victory of the Empire!: Rebel Retreat", MILITARY);
-                return 2; // End battle
+                return 2;
             }
         } else {
             if (soldierCount >= residualRebelCount * 0.2 && rebelCount < residualRebelCount * 0.3) {
-                return 3; // Continue battle
+                return 3;
             } else {
                 Logger.logEvent("Victory of the Rebels!: Soldiers Retreat", MILITARY);
-                return 2; // End battle
+                return 2;
             }
         }
     }

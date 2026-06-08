@@ -28,12 +28,12 @@ public class AIManager {
         float militaryUrgency = (militaryRatio < 1.0f) ? 1.0f - militaryRatio : 0.0f;
 
         // --- TIER 0: Divine Intervention (AI Last Resort) ---
-        if (kingdom.canUseDivineIntervention && kingdom.treasury > (int)DivineIntervention.AI_DIVINE_INTERVENTION_TREASURY_THRESHOLD.value) {
+        if (kingdom.canUseDivineIntervention && kingdom.gold > (int)DivineIntervention.AI_DIVINE_INTERVENTION_TREASURY_THRESHOLD.value) {
 
             // Condition 1: Reinforcements (Military Collapse)
             if (militaryUrgency > 0.8f) {
                 Logger.logEvent("GOVERNOR: Armies collapsing! Praying for divine reinforcements.", MILITARY);
-                kingdom.treasury -= (int)ReinforceIntervention.DI_COST_REINFORCEMENTS.value;
+                kingdom.gold -= (int)ReinforceIntervention.DI_COST_REINFORCEMENTS.value;
                 for (int i = 0; i < (int)ReinforceIntervention.DI_REINFORCEMENTS_COUNT.value; i++) {
                     Human h = new Human(kingdom.id);
                     h.job = 6; // Swordsman
@@ -48,7 +48,7 @@ public class AIManager {
             // Condition 2: Absolution (Mass Unrest Threatening Collapse)
             if (kingdom.unrestLevel > InterventionAbsolution.DI_ABSOLUTION_UNREST_THRESHOLD.value && unrestUrgency > 0.7f) {
                 Logger.logEvent("GOVERNOR: The people threaten to tear down the walls! We beg for divine absolution!", NATURAL);
-                kingdom.treasury -= InterventionAbsolution.DI_COST_ABSOLUTION.value;
+                kingdom.gold -= InterventionAbsolution.DI_COST_ABSOLUTION.value;
                 kingdom.unrestLevel -= InterventionAbsolution.DI_ABSOLUTION_UNREST_REDUCTION.value;
                 kingdom.armyMorale -= InterventionAbsolution.DI_PENALTY_MORALE_DROP.value;
                 if (kingdom.armyMorale < 0) kingdom.armyMorale = 0;
@@ -61,7 +61,7 @@ public class AIManager {
             // Condition 3: Sustenance (Catastrophic Famine Imminent)
             if (foodUrgency > 0.9f) {
                 Logger.logEvent("GOVERNOR: The granaries are empty and the people starve! We plead for a miracle of sustenance!", STORY);
-                kingdom.treasury -= (int)InterventionSustenance.DI_COST_SUSTENANCE.value;
+                kingdom.gold -= (int)InterventionSustenance.DI_COST_SUSTENANCE.value;
                 kingdom.food += (int)InterventionSustenance.DI_SUSTENANCE_FOOD_AMOUNT.value;
                 kingdom.divineProductionModifier = InterventionSustenance.DI_PENALTY_PRODUCTION_MODIFIER.value;
 
@@ -101,12 +101,12 @@ public class AIManager {
                 }
                 kingdom.recruitSoldiers(population);
             }
-            else if (maxUrgency == unrestUrgency && kingdom.treasury >= (int)AIGovernor.AI_FESTIVAL_COST.value) {
+            else if (maxUrgency == unrestUrgency && kingdom.gold >= (int)AIGovernor.AI_FESTIVAL_COST.value) {
                 if (!DailyEventTracker.festivalTriggered) {
                     Logger.logEvent("GOVERNOR: Hosting festivals to calm the populace in " + kingdom.name, Logger.LogCategory.POLITICAL);
                     DailyEventTracker.festivalTriggered = true;
                 }
-                kingdom.treasury -= (int)AIGovernor.AI_FESTIVAL_COST.value;
+                kingdom.gold -= (int)AIGovernor.AI_FESTIVAL_COST.value;
                 kingdom.unrestLevel -= (int)AIGovernor.AI_FESTIVAL_UNREST_REDUCTION.value;
                 if (kingdom.unrestLevel < 0) kingdom.unrestLevel = 0;
             }

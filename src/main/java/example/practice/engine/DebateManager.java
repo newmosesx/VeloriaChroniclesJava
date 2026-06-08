@@ -1,14 +1,27 @@
 package example.practice.engine;
 
 import example.practice.humans.Human;
+import example.practice.kingdoms.Kingdom;
 import example.practice.logger.Logger;
+import example.practice.story.Council;
+import example.practice.story.CouncilMember;
+import example.practice.story.DialogueToken;
+import example.practice.story.Disposition;
+
 import java.util.ArrayList;
 import java.util.List;
 
+// Public API (chosenResponse, Choice, hasChoices, getChoices, handleTimeout) is
+// unchanged so MainGUI keeps working. What changed: each choice now speaks a
+// DialogueToken to the council, and the kingdom-level fallout (unrest, morale)
+// is DERIVED from how the council feels afterward - not flat magic numbers.
 public class DebateManager {
 
-    // Stores the player's final choice to render in the chat
     public static String chosenResponse = null;
+
+    private static Council council = Council.imperialCouncil();
+    public static Council getCouncil() { return council; }
+    public static void resetCouncil() { council = Council.imperialCouncil(); }
 
     public static class Choice {
         public String text;
@@ -27,41 +40,59 @@ public class DebateManager {
         List<Choice> choices = new ArrayList<>();
         List<Human> pop = engine.getWorldPopulation();
 
-        if (chapterIndex == 8 && paragraphIndex == 18) {
-            choices.add(new Choice("1. \"I was securing the future!\" (Authority)", () -> {
-                engine.getKingdoms()[0].modifyMorale(15);
-                engine.getKingdoms()[0].unrestLevel += 100;
-                chosenResponse = "I was securing the future! We did what was necessary.";
-                Logger.logEvent("Emperor asserts harsh authority! Morale rises, but unrest simmers.", Logger.LogCategory.POLITICAL);
-            }));
+        if (!(chapterIndex == 8 && paragraphIndex == 18)) return choices;
 
-            choices.add(new Choice("2. \"We must unite in this crisis.\" (Diplomacy)", () -> {
-                engine.getKingdoms()[0].unrestLevel -= 200;
-                if (engine.getKingdoms()[0].unrestLevel < 0) engine.getKingdoms()[0].unrestLevel = 0;
-                engine.getKingdoms()[0].treasury -= 25000;
-                chosenResponse = "We must unite in this crisis. Let funds be diverted to the people.";
-                Logger.logEvent("Emperor appeases the council. Treasury funds diverted to public aid.", Logger.LogCategory.POLITICAL);
-            }));
+        choices.add(new Choice("1. \"I was securing the future!\" (Authority)", () -> {
+            council.applyToAll(DialogueToken.AUTHORITY);
+            resolveCouncilOutcome(engine, "I was securing the future! We did what was necessary.");
+        }));
 
-            // --- THE SEVERE TYRANNY CHOICE ---
-            choices.add(new Choice("3. \"Silence! Guards, arrest this fool!\" (Tyranny)", () -> {
-                engine.getKingdoms()[0].unrestLevel += 500;
-                engine.getKingdoms()[0].limitersDisabled = true; // Disable boundary limits
-                engine.getKingdoms()[0].modifyMorale(-25);
-                engine.getKingdoms()[0].triggerMassDesertion(pop, 0.10); // 10% desert
-                chosenResponse = "Silence! Guards, arrest this fool immediately!";
-                Logger.logEvent("A council member is arrested! Limiters disabled! The political house is in an uproar!", Logger.LogCategory.POLITICAL);
-            }));
-        }
+        choices.add(new Choice("2. \"We must unite in this crisis.\" (Diplomacy)", () -> {
+            council.applyToAll(DialogueToken.DIPLOMACY);
+            engine.getKingdoms()[0].gold -= 25000; // funds diverted to public aid
+            resolveCouncilOutcome(engine, "We must unite in this crisis. Let funds be diverted to the people.");
+        }));
+
+        choices.add(new Choice("3. \"Silence! Guards, arrest this fool!\" (Tyranny)", () -> {
+            council.applyToAll(DialogueToken.TYRANNY);
+            Kingdom empire = engine.getKingdoms()[0];
+            empire.limitersDisabled = true;          // the edict still removes the safety rails
+            empire.triggerMassDesertion(pop, 0.10);  // 10% of troops defect
+            resolveCouncilOutcome(engine, "Silence! Guards, arrest this fool immediately!");
+        }));
+
         return choices;
     }
 
     public static void handleTimeout(int chapterIndex, int paragraphIndex, SimulationEngine engine) {
         if (chapterIndex == 8 && paragraphIndex == 18) {
-            engine.getKingdoms()[0].unrestLevel += 300;
-            engine.getKingdoms()[0].modifyMorale(-20);
-            chosenResponse = "... (The Emperor stammers in silence)";
-            Logger.logEvent("The Emperor stammered in silence. The council sees him as weak and unfit!", Logger.LogCategory.POLITICAL);
+            council.applyToAll(DialogueToken.SILENCE);
+            resolveCouncilOutcome(engine, "... (The Emperor stammers in silence)");
         }
+    }
+
+    // The micro -> macro bridge. Unrest and morale now come from the council's
+    // mood, so the same choice can play out very differently depending on the
+    // relationships you've built (or burned) up to this point.
+    private static void resolveCouncilOutcome(SimulationEngine engine, String response) {
+        chosenResponse = response;
+        Kingdom empire = engine.getKingdoms()[0];
+
+        int unrestSwing = council.aggregateUnrestSwing();
+        empire.unrestLevel += unrestSwing;
+        if (empire.unrestLevel < 0) empire.unrestLevel = 0;
+
+        int loyal = council.countOf(Disposition.LOYAL);
+        int hostile = council.countOf(Disposition.HOSTILE);
+        empire.modifyMorale(loyal * 6 - hostile * 9);
+
+        StringBuilder sb = new StringBuilder("Council reacts -> ");
+        for (CouncilMember m : council.members) {
+            sb.append(m.name).append(": ").append(m.disposition());
+            if (m.locked) sb.append(" (locked)");
+            sb.append("   ");
+        }
+        Logger.logEvent(sb.toString().trim(), Logger.LogCategory.POLITICAL);
+        Logger.logEvent("Chamber unrest swing: " + (unrestSwing >= 0 ? "+" : "") + unrestSwing, Logger.LogCategory.POLITICAL);
     }
 }

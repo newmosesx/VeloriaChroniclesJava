@@ -58,6 +58,16 @@ public class MainGUI extends Application {
     private Timeline debateTimer;
     private int timeLeft = 6;
 
+    // --- Battle cinematic ---
+    private static final int BATTLE_CHAPTER   = 7;   // "Chapter Eight: Embers in the North" (index 7)
+    private static final int BATTLE_PARAGRAPH = 9;   // the clash beat ("...blades were out")
+    private boolean battlePlayed = false;
+
+    // --- Map UI ---
+    private Region mapPanel;
+    private boolean mapVisible = false;
+    private Button btnMap;
+
     private static class KingdomUI {
         TitledPane pane;
         Label lblPop, lblResources, lblUnrest, lblTroops;
@@ -199,6 +209,13 @@ public class MainGUI extends Application {
         debateView.getChildren().addAll(new Label("THE COUNCIL HOUSE"), chatScroll, lblTimer, choicesContainer, btnDebateNext);
 
         centerContainer.getChildren().addAll(storyView, debateView);
+
+        mapPanel = MapPanel.build(engine);
+        mapPanel.setVisible(false);
+        mapPanel.setManaged(false);
+        StackPane.setAlignment(mapPanel, Pos.CENTER);
+        centerContainer.getChildren().add(mapPanel);
+
         root.setCenter(centerContainer);
 
         // --- RIGHT PANEL ---
@@ -209,6 +226,36 @@ public class MainGUI extends Application {
 
         Button btnManager = createStyledButton("Manager");
         btnManager.setOnAction(e -> ManagerPopup.display(engine));
+
+        Button btnSave = createStyledButton("Save Game");
+        btnSave.setOnAction(e -> {
+            javafx.stage.FileChooser fc = new javafx.stage.FileChooser();
+            fc.setInitialFileName("veloria_save.txt");
+            java.io.File f = fc.showSaveDialog(primaryStage);
+            if (f != null) {
+                try { SaveManager.save(engine, f); }
+                catch (Exception ex) { showError("Save failed", ex); }
+            }
+        });
+
+        Button btnLoad = createStyledButton("Load Game");
+        btnLoad.setOnAction(e -> {
+            javafx.stage.FileChooser fc = new javafx.stage.FileChooser();
+            java.io.File f = fc.showOpenDialog(primaryStage);
+            if (f != null) {
+                try {
+                    SaveManager.load(engine, f);
+                    currentChapter = engine.sharedData.currentStoryChapter;
+                    currentParagraph = engine.sharedData.currentStoryParagraph;
+                    updateStoryView();   // snap the story panel to the restored position
+                } catch (Exception ex) { showError("Load failed", ex); }
+            }
+        });
+
+        btnMap = createStyledButton("World Map");
+        btnMap.setOnAction(e -> toggleMap());
+
+        centerContainer.getChildren().add(AdminDashboard.button(engine));
 
         // EXPLICIT CHAPTER NAVIGATION
         btnPrevChapter = createStyledButton("Previous Chapter");
@@ -240,7 +287,7 @@ public class MainGUI extends Application {
         btnQuit.setStyle("-fx-background-color: #702020; -fx-text-fill: white;");
         btnQuit.setOnAction(e -> System.exit(0));
 
-        right.getChildren().addAll(new Label("ACTIONS"), btnManager, btnPrevChapter, btnNextChapter, comboChars, new Spacer(), btnQuit);
+        right.getChildren().addAll(new Label("ACTIONS"), btnManager, btnMap, btnSave, btnLoad, AgentPanel.button(engine), btnPrevChapter, btnNextChapter, comboChars, new Spacer(), btnQuit);
         root.setRight(right);
 
         chapterCompleted = new boolean[StoryData.CHAPTERS.size()];
@@ -258,7 +305,17 @@ public class MainGUI extends Application {
 
     private void advanceParagraph() {
         if (currentParagraph < StoryData.CHAPTERS.get(currentChapter).paragraphs.length - 1) {
-            currentParagraph++;
+            int next = currentParagraph + 1;
+
+            // MODE (a): cinematic first, battle text after.
+            if (currentChapter == BATTLE_CHAPTER && next == BATTLE_PARAGRAPH && !battlePlayed) {
+                battlePlayed = true;
+                currentParagraph = next;
+                playBattle(this::updateStoryView);   // animation -> then show the text
+                return;
+            }
+
+            currentParagraph = next;
             updateStoryView();
         }
     }
@@ -270,16 +327,15 @@ public class MainGUI extends Application {
         }
     }
 
-    private VBox createChatBubble(String senderName, String message, boolean isPlayer) {
+    private Region createChatBubble(String senderName, String message, boolean isPlayer) {
         VBox bubble = new VBox(5);
         bubble.setPadding(new Insets(10));
+        bubble.setMaxWidth(520);
 
         if (isPlayer) {
-            // Player Bubble: Dark Red/Purple, Aligned Right
             bubble.setStyle("-fx-background-color: #3b2a2f; -fx-border-color: #5e303b; -fx-border-radius: 8; -fx-background-radius: 8;");
             bubble.setAlignment(Pos.CENTER_RIGHT);
         } else {
-            // NPC Bubble: Dark Grey, Aligned Left
             bubble.setStyle("-fx-background-color: #2a2a2a; -fx-border-color: #444; -fx-border-radius: 8; -fx-background-radius: 8;");
             bubble.setAlignment(Pos.CENTER_LEFT);
         }
@@ -293,11 +349,23 @@ public class MainGUI extends Application {
         if (isPlayer) msg.setTextAlignment(javafx.scene.text.TextAlignment.RIGHT);
 
         bubble.getChildren().addAll(sender, msg);
-        return bubble;
+
+        // portrait beside the bubble: player on the right, everyone else on the left
+        javafx.scene.Node face = Portraits.avatar(isPlayer ? "The Emperor" : senderName, 46);
+        HBox row = new HBox(10);
+        row.setAlignment(isPlayer ? Pos.CENTER_RIGHT : Pos.CENTER_LEFT);
+        if (isPlayer) row.getChildren().addAll(bubble, face);
+        else          row.getChildren().addAll(face, bubble);
+        return row;
     }
 
     private void updateStoryView() {
         StoryData.Chapter ch = StoryData.CHAPTERS.get(currentChapter);
+
+        // Re-arm the battle cinematic if we've moved back before the clash.
+        if (currentChapter == BATTLE_CHAPTER && currentParagraph < BATTLE_PARAGRAPH) {
+            battlePlayed = false;
+        }
 
         // Check if we are in the Debate Chapter (Index 8)
         boolean isDebateMode = (currentChapter == 8);
@@ -429,7 +497,7 @@ public class MainGUI extends Application {
                                 ui.pane.setText(i == 0 ? "The Great Empire" : "Successor Kingdom");
 
                                 ui.lblPop.setText("Population: " + k.population);
-                                ui.lblResources.setText(String.format("F: %d | W: %d | S: %d | M: %d | T: %d", k.food, k.wood, k.stone, k.metal, k.treasury));
+                                ui.lblResources.setText(String.format("F: %d | W: %d | S: %d | M: %d | T: %d", k.food, k.wood, k.stone, k.metal, k.gold));
 
                                 ui.lblUnrest.setText("Unrest: " + k.unrestLevel + " | Morale: " + k.armyMorale);
                                 if (k.unrestLevel > 2000) ui.lblUnrest.setTextFill(Color.web(UIColors.UNREST_RED));
@@ -478,6 +546,34 @@ public class MainGUI extends Application {
     }
 
     private static class Spacer extends Region { public Spacer() { VBox.setVgrow(this, Priority.ALWAYS); } }
+
+    private void playBattle(Runnable onComplete) {
+        BattleScene.Spec spec = new BattleScene.Spec(
+                "The North Road",
+                14, 6,      // convoy guards (imperial), Joric's squad (rebel)
+                4, 5,       // survivors: guards routed, the squad nearly intact
+                false);     // empireWon -> false; the ambush succeeds
+        BattleScene.play(centerContainer, spec, onComplete);
+    }
+
+    private void toggleMap() {
+        mapVisible = !mapVisible;
+        mapPanel.setVisible(mapVisible);
+        mapPanel.setManaged(mapVisible);
+        btnMap.setText(mapVisible ? "Back to Story" : "World Map");
+        if (mapVisible) {
+            storyView.setVisible(false);  storyView.setManaged(false);
+            debateView.setVisible(false); debateView.setManaged(false);
+        } else {
+            updateStoryView();   // restores whichever view the current chapter wants
+        }
+    }
+
+    private void showError(String title, Exception ex) {
+        Alert a = new Alert(Alert.AlertType.ERROR, String.valueOf(ex.getMessage()), ButtonType.OK);
+        a.setHeaderText(title);
+        a.showAndWait();
+    }
 
     public static void main(String[] args) {
         launch(args);
