@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import javafx.geometry.Rectangle2D;
 
 /**
  * Turns a character NAME into a round portrait -- but spoiler-safe: until the
@@ -123,7 +124,16 @@ public final class Portraits {
     }
     private static ImageView clipped(Image img, double size) {
         ImageView iv = new ImageView(img);
-        iv.setFitWidth(size); iv.setFitHeight(size); iv.setPreserveRatio(true);
+        double w = img.getWidth(), h = img.getHeight();
+        double side = Math.min(w, h);
+        // Crop to a square. For tall portraits, bias toward the top
+        // so faces stay in frame (0.5 = dead center, 0 = top edge).
+        double x = (w - side) / 2.0;
+        double y = (h - side) * 0.25;
+        iv.setViewport(new Rectangle2D(x, y, side, side));
+        iv.setFitWidth(size);
+        iv.setFitHeight(size);
+        iv.setSmooth(true);
         iv.setClip(new Circle(size / 2.0, size / 2.0, size / 2.0));
         return iv;
     }
