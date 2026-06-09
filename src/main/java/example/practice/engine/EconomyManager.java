@@ -64,7 +64,7 @@ public class EconomyManager {
                 * (1f + TechManager.bonus(TechEffect.RESOURCE));
         kingdom.wood += (int)(woodProduced * prodMod);
         kingdom.stone += (int)(stoneProduced * prodMod);
-        kingdom.metal += (int)(metalProduced * prodMod);
+        kingdom.metal += (int)(metalProduced * prodMod * (1f + TechManager.bonus(TechEffect.MINERAL)));
     }
 
     public static void distributePayments(List<Human> batch) {

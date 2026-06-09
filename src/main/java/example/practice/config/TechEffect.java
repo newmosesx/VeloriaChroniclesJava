@@ -9,5 +9,8 @@ public enum TechEffect {
     DEFENSE,   // army resilience / fortification
     RESOURCE,  // wood / stone / metal yield
     GRANARY,   // how deep the granary can stock
-    ORDER      // bureaucracy: less unrest per unit of grievance
+    ORDER,     // bureaucracy: less unrest per unit of grievance
+    RECRUIT,   // how fast the army takes on new soldiers
+    MINERAL,   // metal yield specifically (deep mining)
+    SUPPLY     // how much the farming surplus provisions the army
 }

@@ -39,7 +39,7 @@ public class TechManager {
             if (state[i] == State.RESEARCHING) {
                 if (--daysLeft[i] <= 0) { state[i] = State.IMPLEMENTING; progress[i] = 0f; }
             } else if (state[i] == State.IMPLEMENTING) {
-                progress[i] += 0.20f; // +20% per day
+                progress[i] += TechType.values()[i].rolloutPerDay;
                 if (progress[i] >= 1f) { progress[i] = 1f; state[i] = State.ACTIVE; }
             }
         }

@@ -14,7 +14,16 @@ import static example.practice.logger.Logger.LogCategory.STORY;
 
 public class RebellionManager {
 
+    // How strongly freedom beats loyalty when a desperate commoner decides to act.
+    // The commons know the rebels eat while the empire's granaries sit empty, so the
+    // road to the rebellion is the favoured one.
+    private static final double REBEL_BASE_WEIGHT   = 0.25; // baseline pull toward revolt
+    private static final double WEIGHT_EMPTY_GRANARY = 0.10; // +pull when the people's stores are bare
+    private static final double WEIGHT_FED_ARMY      = 0.05; // +pull when the legions are visibly well-fed
+
     public static void handleRecruitmentAndDissent(Kingdom kingdom, List<Human> population) {
+        // Gated by the conflict spine: no churn at peace.
+        if (ConflictManager.stateOf(kingdom) == ConflictState.PEACE) return;
         if (!kingdom.isActive || kingdom.unrestLevel <= Rebellion.DISSENTTHRESHOLD.value) return;
 
         int newRebelsToday = 0;
@@ -25,6 +34,21 @@ public class RebellionManager {
             unrestOverThreshold = (int) Rebellion.MAXUNRESTFORREBELCONVERSION.value;
         }
 
+        // Is the army actually being fed from its granary? Well-supplied legions hold;
+        // legions on empty rations break and walk over to the rebellion.
+        int soldiers = 0;
+        for (Human h : population)
+            if (h.isAlive && h.kingdomId == kingdom.id && h.job >= 6 && h.job <= 8) soldiers++;
+        boolean armyHungry = kingdom.militaryFood < soldiers;          // less than ~one ration each in store
+        boolean armyWellFed = kingdom.militaryFood >= soldiers * 4;     // comfortably stocked
+
+        // The commons' choice is weighted by what they can see: empty public granaries
+        // and a well-fed army both push more of them toward the rebels.
+        double rebelWeight = REBEL_BASE_WEIGHT;
+        if (kingdom.food <= 0) rebelWeight += WEIGHT_EMPTY_GRANARY;
+        if (kingdom.militaryFood > 0) rebelWeight += WEIGHT_FED_ARMY;
+        if (rebelWeight > 0.92) rebelWeight = 0.92;                     // some always endure
+
         for (Human h : population) {
             if (!h.isAlive || h.job == Military.REBEL.value || h.kingdomId != kingdom.id) continue;
             if (newRebelsToday >= maxNewRebels) break;
@@ -33,23 +57,34 @@ public class RebellionManager {
             boolean becameRebel = false;
 
             if (isSoldier) {
+                // A fed army holds the line; a starving one defects far more readily.
+                double mult = armyHungry ? 1.1 : (armyWellFed ? 0.4 : 0.8);
                 int defectionChance = (int) (unrestOverThreshold * Rebellion.SOLDIERDEFECTIONCHANCE.value);
-                if ((Math.random() * Rebellion.REBELCHANCEDIVISOR.value) < defectionChance) {
-                    kingdom.modifyMorale(-5); // FIX: route through the clamp, not raw armyMorale -= 5
+                if ((Math.random() * Rebellion.REBELCHANCEDIVISOR.value) < defectionChance * mult) {
+                    kingdom.modifyMorale(-5);
                     h.job = Military.REBEL.value;
                     becameRebel = true;
                 }
             } else {
+                // The commoner is pushed to act this tick (scales with how far past the
+                // dissent line the realm has slid).
                 if ((Math.random() * Rebellion.REBELCHANCEDIVISOR.value) < unrestOverThreshold) {
-                    h.job = Military.REBEL.value;
-                    becameRebel = true;
+                    // TWO ROADS:
+                    //   - fight for freedom  -> join the rebels (the favoured road)
+                    //   - die for the empire -> endure, and remain exposed to the famine
+                    if (Math.random() < rebelWeight) {
+                        h.job = Military.REBEL.value;     // fight for freedom
+                        becameRebel = true;
+                    }
+                    // else: they stay loyal and endure -- no job change. The granary, not
+                    // this method, decides whether that loyalty costs them their life.
                 }
             }
 
             if (becameRebel) {
                 newRebelsToday++;
                 if (Math.random() * 100 < Rebellion.REBELLEADERSPAWNCHANCE.value) {
-                    h.isGeneral = true; // Rebel leader
+                    h.isGeneral = true; // a field leader rises from the ranks
                 }
             }
         }

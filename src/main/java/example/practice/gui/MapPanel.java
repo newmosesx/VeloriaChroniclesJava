@@ -1,5 +1,6 @@
 package example.practice.gui;
 
+import example.practice.engine.ConflictManager;
 import example.practice.engine.SimulationEngine;
 import example.practice.kingdoms.Kingdom;
 import example.practice.world.Agriculture;
@@ -65,7 +66,8 @@ public final class MapPanel {
         SOIL ("Soil",  "#8a6a3a", "#2f7d6b", "dry",    "wet"),
         YIELD("Yield", "#9a8b55", "#3f8a2f", "barren", "lush"),
         FLOOD("Flood", "#5a6b4a", "#235c8c", "calm",   "flooded"),
-        HEAT ("Heat",  "#3a6ea5", "#c0392b", "cold",   "hot");
+        HEAT ("Heat",  "#3a6ea5", "#c0392b", "cold",   "hot"),
+        CONTROL("Control", "#c0392b", "#e8c14a", "rebel", "loyal");
 
         final String label; final Color lo, hi; final String loT, hiT;
         Metric(String label, String lo, String hi, String loT, String hiT) {
@@ -81,6 +83,7 @@ public final class MapPanel {
         final String dir, region; final boolean capital;
         final int id;                         // world sector id; -1 for the capital
         double soil, yield, flood, tempC;     // live values
+        double control = 1.0;                 // +1 fully loyal .. -1 fully rebel
         String crop = "";
         Polygon poly; Text badge; double cx, cy;
         Sector(String dir, String region, boolean capital, int id) {
@@ -88,7 +91,8 @@ public final class MapPanel {
         }
         double value(Metric m) {
             switch (m) { case SOIL: return soil; case YIELD: return yield;
-                case FLOOD: return flood; default: return tempC; }
+                case FLOOD: return flood; case CONTROL: return control;
+                default: return tempC; }
         }
     }
 
@@ -299,9 +303,15 @@ public final class MapPanel {
         for (Sector s : sectors) {
             if (s.capital) continue;            // the Imperial Seat is never tinted
             double v = s.value(current);
-            double t = (current == Metric.HEAT) ? (v - HEAT_LO) / (HEAT_HI - HEAT_LO) : v / 100.0;
+            double t;
+            if (current == Metric.HEAT) t = (v - HEAT_LO) / (HEAT_HI - HEAT_LO);
+            else if (current == Metric.CONTROL) t = (v + 1) / 2.0;   // -1..+1 -> 0..1
+            else t = v / 100.0;
             s.poly.setFill(current.lo.interpolate(current.hi, clamp01(t)));
-            if (s.badge != null) s.badge.setText(String.valueOf(Math.round(v)));
+            if (s.badge != null)
+                s.badge.setText(current == Metric.CONTROL
+                        ? Math.round(v * 100) + ""
+                        : String.valueOf(Math.round(v)));
         }
         ramp.setStyle("-fx-background-radius: 5; -fx-background-color: linear-gradient(to right, "
                 + toHex(current.lo) + ", " + toHex(current.hi) + ");");
@@ -315,6 +325,7 @@ public final class MapPanel {
                 + "  \u00b7  yield " + Math.round(s.yield) + "%"
                 + "  \u00b7  flood " + Math.round(s.flood) + "%"
                 + "  \u00b7  " + Math.round(s.tempC) + "\u00b0C"
+                + "  \u00b7  control " + Math.round(s.control * 100) + "%"
                 + (s.crop.isEmpty() ? "" : "  \u00b7  " + s.crop));
     }
 
@@ -338,7 +349,7 @@ public final class MapPanel {
         double unrest = empire.unrestLevel;
         double frac = clamp01(unrest / 2500.0);            // ~ PoliticsConfig.UNREST_FULL_SCALE
         unrestBar.setProgress(frac);
-        unrestLabel.setText(String.valueOf((int) unrest));
+        unrestLabel.setText((int) unrest + "  \u00b7  " + ConflictManager.stateOf(empire));
         String accent = frac > 0.8 ? "#c0392b" : frac > 0.4 ? "#d98a2b" : "#5a9e4a";
         unrestBar.setStyle("-fx-accent: " + accent + ";");
 
@@ -354,6 +365,7 @@ public final class MapPanel {
             s.crop  = ag.cropState[s.id];
             s.flood = wa.floodSeverity[s.id] * 100.0;
             s.tempC = cl.temperature[s.id];
+            s.control = ConflictManager.sectorControl(s.id);
         }
     }
 

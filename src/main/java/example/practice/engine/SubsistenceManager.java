@@ -22,14 +22,21 @@ public class SubsistenceManager {
     private static final float[] birthAcc = new float[64];
     private static final float[] deathAcc = new float[64];
 
+    // Farmers now produce far more than the people's ration; the surplus provisions
+    // the army from its own granary. The people's share stays FOOD_PER_FARMER (6).
+    private static final float ARMY_FOOD_PER_FARMER = 19f; // ~25 total per farmer; 6 to the people, the rest to the legions
+    private static final int   MILITARY_RATION      = 2;   // a soldier eats more than a civilian
+    private static final int   MIL_STORE_DAYS       = 30;  // how long the army can stockpile rations
+
     public static void process(Kingdom kingdom, List<Human> population, World world) {
         if (!kingdom.isActive) return;
 
-        int pop = 0, farmers = 0;
+        int pop = 0, farmers = 0, soldiers = 0;
         for (Human h : population) {
             if (!h.isAlive || h.kingdomId != kingdom.id) continue;
             pop++;
-            if (h.job == 1 || h.job == 2) farmers++; // farmers + butchers feed people
+            if (h.job == 1 || h.job == 2) farmers++;        // farmers + butchers feed people
+            else if (h.job >= 6 && h.job <= 8) soldiers++;  // the standing army
         }
         if (pop <= 0) return;
 
@@ -41,7 +48,10 @@ public class SubsistenceManager {
 
         // Agriculture tech (heavy plough, crop rotation) raises food per farmer.
         float foodTech = 1f + TechManager.bonus(TechEffect.FOOD);
-        float production = farmers * fpf * foodTech * climateYield * landDensity;
+        float factor = foodTech * climateYield * landDensity;
+        // The people's share is unchanged (FOOD_PER_FARMER); the surplus beyond it is
+        // farmed for the legions and routed to the military granary further down.
+        float production = farmers * fpf * factor;
         float need = pop * fpp;
         float available = kingdom.food + production;
 
@@ -77,6 +87,18 @@ public class SubsistenceManager {
                 DailyEventTracker.famineLogged = true;
             }
         }
+
+        // --- MILITARY RATIONS ---------------------------------------------------
+        // Farmers yield far more than the people receive; that surplus feeds the army
+        // from its own granary, so the legions stay provisioned even as the commons
+        // starve -- which is exactly why the commons increasingly choose to defect.
+        int armyProduction = (int) (farmers * ARMY_FOOD_PER_FARMER * factor
+                * (1f + TechManager.bonus(TechEffect.SUPPLY)));
+        kingdom.militaryFood += armyProduction;
+        kingdom.militaryFood -= soldiers * MILITARY_RATION;   // the legions eat first, and well
+        if (kingdom.militaryFood < 0) kingdom.militaryFood = 0;
+        int milCap = (int) (soldiers * MILITARY_RATION * MIL_STORE_DAYS);
+        if (kingdom.militaryFood > milCap) kingdom.militaryFood = milCap;
 
         // Baseline mortality always ticks.
         deathAcc[kingdom.id] += pop * SubsistenceConfig.NATURAL_DEATH_RATE.value;

@@ -396,7 +396,7 @@ public final class SaveManager {
         if (halves.length > 1) setFloats(death, halves[1].split(","));
     }
 
-    private static final String[] STORY_FLAGS = { "ch1_p3", "ch1_p7", "ch1_p9", "ch8_p0", "ch8_p12", "ch8_p26" };
+    private static final String[] STORY_FLAGS = { "ch1_p3", "ch1_p7", "ch1_p9", "ch8_p0", "ch8_p9", "ch8_p19" };
     private static String exportStory() throws Exception {
         Class<?> c = example.practice.engine.StoryManager.class;
         StringBuilder b = new StringBuilder();

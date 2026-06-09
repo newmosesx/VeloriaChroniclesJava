@@ -1,5 +1,6 @@
 package example.practice.gui;
 
+import example.practice.engine.ConflictManager;
 import example.practice.engine.SimulationEngine;
 import example.practice.report.KingdomReport;
 import example.practice.report.WorldReport;
@@ -82,7 +83,7 @@ public class AdminDashboard {
                 WorldReport rep = WorldReport.from(engine);
                 World world = engine.getWorld();
                 h = buildHeader(rep);
-                w = buildKingdoms(rep);
+                w = buildKingdoms(rep, engine);
                 e = buildEnvironment(world);
             } finally {
                 engine.unlock();
@@ -159,12 +160,13 @@ public class AdminDashboard {
         b.append(cl.reportLine()).append("\n");
         b.append(ag.reportLine()).append("\n\n");
 
-        b.append(String.format("%-22s %6s %5s %5s %-11s %5s %6s %-16s%n",
-                "Region", "Temp", "Rain", "Wind", "Sky", "Soil", "Yield", "Crop"));
-        b.append("-----------------------------------------------------------------------------------\n");
+        b.append(String.format("%-22s %6s %5s %5s %-11s %5s %6s %7s %-16s%n",
+                "Region", "Temp", "Rain", "Wind", "Sky", "Soil", "Yield", "Loyal%", "Crop"));
+        b.append("----------------------------------------------------------------------------------------------\n");
         for (int i = 0; i < geo.count(); i++) {
             String region = geo.sector(i).region() + (geo.sector(i).coastal ? " *" : "");
-            b.append(String.format("%-22s %5.1fC %4.0f%% %4.0f%% %-11s %4.0f%% %5.0f%% %-16s%n",
+            float loyal = ConflictManager.sectorControl(i) * 100;
+            b.append(String.format("%-22s %5.1fC %4.0f%% %4.0f%% %-11s %4.0f%% %5.0f%% %6.0f%% %-16s%n",
                     region,
                     cl.temperature[i],
                     cl.precipitation[i] * 100,
@@ -172,19 +174,21 @@ public class AdminDashboard {
                     cl.condition[i],
                     ag.soilMoisture[i] * 100,
                     ag.yield[i] * 100,
+                    loyal,
                     ag.cropState[i]));
         }
         b.append("\n(* coastal sector)\n");
         return b.toString();
     }
 
-    private static String buildKingdoms(WorldReport rep) {
+    private static String buildKingdoms(WorldReport rep, SimulationEngine engine) {
         StringBuilder b = new StringBuilder();
-        b.append(String.format("%-22s %-5s %7s %5s %6s %9s %6s %5s %5s %-9s%n",
-                "Kingdom", "State", "Pop", "Stab", "Morale", "Food", "FDays", "Sol", "Reb", "Weakest"));
-        b.append("-----------------------------------------------------------------------------------------------\n");
+        b.append(String.format("%-22s %-5s %7s %5s %6s %9s %6s %5s %5s %5s %-9s%n",
+                "Kingdom", "State", "Pop", "Stab", "Morale", "Food", "FDays", "Sol", "Reb", "Org%", "Weakest"));
+        b.append("------------------------------------------------------------------------------------------------------\n");
         for (KingdomReport k : rep.kingdoms) {
-            b.append(String.format("%-22s %-5s %7d %4d%% %6d %9d %6.1f %5d %5d %-9s%n",
+            float org = ConflictManager.organizationOf(engine.getKingdoms()[k.id]) * 100;
+            b.append(String.format("%-22s %-5s %7d %4d%% %6d %9d %6.1f %5d %5d %4.0f%% %-9s%n",
                     truncate(k.name, 22),
                     k.active ? "ON" : "off",
                     k.population,
@@ -194,6 +198,7 @@ public class AdminDashboard {
                     k.foodDaysLeft,
                     k.soldiers,
                     k.rebels,
+                    org,
                     k.weakestPillar));
         }
         return b.toString();

@@ -1,6 +1,7 @@
 package example.practice.kingdoms;
 
 import example.practice.config.*;
+import example.practice.engine.TechManager;
 import example.practice.humans.Human;
 
 import java.util.List;
@@ -16,6 +17,7 @@ public class Kingdom {
     public boolean limitersDisabled = false;
 
     public int food, wood, stone, metal, weapons, gold, armyMorale;
+    public int militaryFood = 0;   // the army's own granary, filled from the farming surplus
 
     public int storySkirmishOverride;
     public float storySkirmishChanceModifier = 1.0f;
@@ -88,10 +90,13 @@ public class Kingdom {
     public void modifyMorale(int amount) {
         this.armyMorale += amount;
 
-        // If limiters are disabled, morale can drop below 0 or exceed 100!
-        if (!this.limitersDisabled) {
-            if (this.armyMorale < 0) this.armyMorale = 0;
-            if (this.armyMorale > 100) this.armyMorale = 100;
+        // ALWAYS clamp Morale between 0 and 100 to prevent UI and math bugs.
+        // 'limitersDisabled' should only affect things like unrest decay, not hard stat bounds.
+        if (this.armyMorale < 0) {
+            this.armyMorale = 0;
+        }
+        if (this.armyMorale > 100) {
+            this.armyMorale = 100;
         }
     }
 
@@ -179,7 +184,8 @@ public class Kingdom {
         if (!this.isActive || this.population == 0) return;
         if (this.unrestLevel < Rebellion.DISSENTTHRESHOLD.value / 2) return;
 
-        int recruitsWanted = 5 + (this.unrestLevel / 20);
+        int recruitsWanted = (int) Math.round((5 + (this.unrestLevel / 20))
+                * (1f + TechManager.bonus(TechEffect.RECRUIT)));
         int recruitedCount = 0;
 
         for (Human h : populationList) {

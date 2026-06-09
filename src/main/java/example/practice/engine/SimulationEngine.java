@@ -164,6 +164,8 @@ public class SimulationEngine implements Runnable {
             if (k.isActive) k.updateCensus(worldPopulation);
         }
 
+        BattleManager.tick(kingdoms[0], worldPopulation, roster, day, hour);
+
         if (hour % 4 == 0) {
             Logger.pruneLogs();
         }
@@ -181,7 +183,9 @@ public class SimulationEngine implements Runnable {
                 k.collectTaxes(worldPopulation);
                 SubsistenceManager.process(k, worldPopulation, world);
                 EdictManager.processDaily(k, worldPopulation);
+                ConflictManager.process(k, worldPopulation, world, day, roster);
                 PoliticsManager.process(k, worldPopulation, world);
+                if (ConflictManager.stateOf(k) == ConflictState.PEACE) continue;
                 RebellionManager.handleRecruitmentAndDissent(k, worldPopulation);
                 k.tickDivinePenalty();
                 k.updateDailyMorale();

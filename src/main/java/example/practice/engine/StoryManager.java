@@ -14,8 +14,8 @@ public class StoryManager {
     private static boolean ch1_p7 = false;
     private static boolean ch1_p9 = false;
     private static boolean ch8_p0 = false;
-    private static boolean ch8_p12 = false;
-    private static boolean ch8_p26 = false;
+    private static boolean ch8_p9 = false;
+    private static boolean ch8_p19 = false;
 
     public static void applyStoryEffects(int chapterIndex, int paragraphIndex, Kingdom kingdom, List<Human> population) {
         if (chapterIndex == 0) { // Chapter 1
@@ -47,14 +47,14 @@ public class StoryManager {
                 kingdom.setSkirmishControl(-1, 1.0f); // halt random skirmishes for the story
                 ch8_p0 = true;
             }
-            else if (paragraphIndex >= 1 && paragraphIndex <= 12 && !ch8_p12) {
+            else if (paragraphIndex >= 1 && paragraphIndex <= 9 && !ch8_p9) {
                 kingdom.setSkirmishControl(-1, 1.0f); // keep them paused through the build-up
-                ch8_p12 = true;
+                ch8_p9 = true;
             }
-            else if (paragraphIndex >= 13 && paragraphIndex <= 26 && !ch8_p26) {
+            else if (paragraphIndex >= 10 && paragraphIndex <= 19 && !ch8_p19) {
                 CombatManager.forceSkirmish(kingdom, population, 360, 480);
                 kingdom.setSkirmishControl(0, 1.0f); // FIX: resume normal skirmishes after the scripted battle
-                ch8_p26 = true;
+                ch8_p19 = true;
             }
         }
     }

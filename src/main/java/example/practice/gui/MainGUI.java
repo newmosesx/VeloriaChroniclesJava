@@ -1,7 +1,7 @@
 package example.practice.gui;
 
 import example.practice.config.UIColors;
-import example.practice.engine.SimulationEngine;
+import example.practice.engine.*;
 import example.practice.kingdoms.Kingdom;
 import example.practice.story.CharacterData;
 import example.practice.story.StoryData;
@@ -24,7 +24,7 @@ import java.util.TimerTask;
 
 import example.practice.logger.Logger;
 import example.practice.logger.Logger.LogCategory;
-import example.practice.engine.DebateManager;
+
 import java.util.EnumMap;
 import java.util.Map;
 
@@ -36,6 +36,8 @@ public class MainGUI extends Application {
     private int currentChapter = 0;
     private int currentParagraph = 0;
     private boolean[] chapterCompleted;
+
+    private boolean battleShowing = false;
 
     private javafx.animation.FadeTransition currentTransition;
 
@@ -252,6 +254,12 @@ public class MainGUI extends Application {
             }
         });
 
+        Button btnCommand = createStyledButton("Command: Auto");
+        btnCommand.setOnAction(e -> {
+            BattleManager.setManual(!BattleManager.isManual());
+            btnCommand.setText("Command: " + (BattleManager.isManual() ? "Manual" : "Auto"));
+        });
+
         btnMap = createStyledButton("World Map");
         btnMap.setOnAction(e -> toggleMap());
 
@@ -287,7 +295,7 @@ public class MainGUI extends Application {
         btnQuit.setStyle("-fx-background-color: #702020; -fx-text-fill: white;");
         btnQuit.setOnAction(e -> System.exit(0));
 
-        right.getChildren().addAll(new Label("ACTIONS"), btnManager, btnMap, btnSave, btnLoad, AgentPanel.button(engine), btnPrevChapter, btnNextChapter, comboChars, new Spacer(), btnQuit);
+        right.getChildren().addAll(new Label("ACTIONS"), btnManager, btnCommand, btnMap, btnSave, btnLoad, AgentPanel.button(engine), btnPrevChapter, btnNextChapter, comboChars, new Spacer(), btnQuit);
         root.setRight(right);
 
         chapterCompleted = new boolean[StoryData.CHAPTERS.size()];
@@ -307,11 +315,19 @@ public class MainGUI extends Application {
         if (currentParagraph < StoryData.CHAPTERS.get(currentChapter).paragraphs.length - 1) {
             int next = currentParagraph + 1;
 
-            // MODE (a): cinematic first, battle text after.
+            // Character reveal: silhouette -> portrait when the story presents someone
+            CharacterReveal.Figure[] reveal = CharacterReveal.pendingAt(currentChapter, next);
+            if (reveal != null) {
+                currentParagraph = next;
+                CharacterReveal.play(centerContainer, reveal, this::updateStoryView);
+                return;
+            }
+
+            // Battle cinematic
             if (currentChapter == BATTLE_CHAPTER && next == BATTLE_PARAGRAPH && !battlePlayed) {
                 battlePlayed = true;
                 currentParagraph = next;
-                playBattle(this::updateStoryView);   // animation -> then show the text
+                playBattle(this::updateStoryView);
                 return;
             }
 
@@ -361,6 +377,7 @@ public class MainGUI extends Application {
 
     private void updateStoryView() {
         StoryData.Chapter ch = StoryData.CHAPTERS.get(currentChapter);
+        CharacterReveal.revealAllUpTo(currentChapter, currentParagraph);
 
         // Re-arm the battle cinematic if we've moved back before the clash.
         if (currentChapter == BATTLE_CHAPTER && currentParagraph < BATTLE_PARAGRAPH) {
@@ -523,6 +540,12 @@ public class MainGUI extends Application {
                         }
                     }
 
+                    BattleReport rep = BattleManager.consumeFinished();
+                    if (rep != null) playBattleReport(rep);
+                    FieldBattle pend = BattleManager.consumePending();
+                    if (pend != null) example.practice.gui.BattleCommandWindow.open(engine, pend,
+                            engine.getKingdoms()[0], engine.getRoster(), engine.getWorldPopulation());
+
                     if (logAutoscrollState == 1) {
                         logAutoscrollState = 2; // Will scroll on the next tick to ensure rendering
                     }
@@ -554,6 +577,14 @@ public class MainGUI extends Application {
                 4, 5,       // survivors: guards routed, the squad nearly intact
                 false);     // empireWon -> false; the ambush succeeds
         BattleScene.play(centerContainer, spec, onComplete);
+    }
+
+    private void playBattleReport(example.practice.engine.BattleReport r) {
+        if (battleShowing) return;
+        battleShowing = true;
+        BattleScene.Spec spec = new BattleScene.Spec(
+                r.title, r.impCommitted, r.rebCommitted, r.impSurvivors, r.rebSurvivors, r.empireWon());
+        BattleScene.play(centerContainer, spec, () -> { battleShowing = false; updateStoryView(); });
     }
 
     private void toggleMap() {

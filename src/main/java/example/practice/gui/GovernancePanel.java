@@ -3,6 +3,9 @@ package example.practice.gui;
 import example.practice.engine.SimulationEngine;
 import example.practice.engine.EdictManager;
 import example.practice.engine.TechManager;
+import example.practice.engine.ConflictManager;
+import example.practice.engine.ConflictState;
+import example.practice.engine.MilitaryPosture;
 import example.practice.config.EdictType;
 import example.practice.config.TechType;
 import example.practice.kingdoms.Kingdom;
@@ -100,8 +103,41 @@ public class GovernancePanel {
             techBox.getChildren().add(row);
         }
 
+        // --- MILITARY & CONFLICT: state, organization, readiness, posture command ---
+        Label milTitle = new Label("Military & Conflict");
+        milTitle.setStyle("-fx-text-fill:#f0f0f0; -fx-font-size:16px; -fx-font-weight:bold;");
+        Label conflictLbl = new Label();
+        conflictLbl.setStyle("-fx-text-fill:#e8c14a; -fx-font-size:13px; -fx-font-weight:bold;");
+
+        Label orgCap = new Label("Rebellion organization");
+        orgCap.setStyle("-fx-text-fill:#b0b0b0; -fx-font-size:11px;");
+        ProgressBar orgBar = new ProgressBar(0);
+        orgBar.setPrefWidth(180);
+        orgBar.setStyle("-fx-accent:#c0392b;");
+        Label readyCap = new Label("Army readiness");
+        readyCap.setStyle("-fx-text-fill:#b0b0b0; -fx-font-size:11px;");
+        ProgressBar readyBar = new ProgressBar(0);
+        readyBar.setPrefWidth(180);
+        readyBar.setStyle("-fx-accent:#3f8a6a;");
+
+        Label postureCap = new Label("Posture  (runs on Auto until you override)");
+        postureCap.setStyle("-fx-text-fill:#b0b0b0; -fx-font-size:11px;");
+        Button bAuto = new Button("Auto");
+        bAuto.setOnAction(ev -> { engine.lock(); try { ConflictManager.setAuto(empire, true); } finally { engine.unlock(); } });
+        Map<MilitaryPosture, Button> postureBtns = new EnumMap<>(MilitaryPosture.class);
+        HBox postureRow = new HBox(6, bAuto);
+        for (MilitaryPosture mp : MilitaryPosture.values()) {
+            String nm = mp.name().charAt(0) + mp.name().substring(1).toLowerCase();
+            Button b = new Button(nm);
+            b.setOnAction(ev -> { engine.lock(); try { ConflictManager.setPosture(empire, mp); } finally { engine.unlock(); } });
+            postureBtns.put(mp, b);
+            postureRow.getChildren().add(b);
+        }
+        VBox milBox = new VBox(6, conflictLbl, orgCap, orgBar, readyCap, readyBar, postureCap, postureRow);
+
         root.getChildren().addAll(header, new Separator(), edictBox,
-                new Separator(), techTitle, techBox);
+                new Separator(), techTitle, techBox,
+                new Separator(), milTitle, milBox);
 
         Runnable refresh = () -> {
             engine.lock();
@@ -148,6 +184,16 @@ public class GovernancePanel {
                         control.getChildren().add(b);
                     }
                 }
+
+                ConflictState cs = ConflictManager.stateOf(empire);
+                conflictLbl.setText("State:  " + cs);
+                orgBar.setProgress(ConflictManager.organizationOf(empire));
+                readyBar.setProgress(ConflictManager.readinessOf(empire));
+                boolean auto = ConflictManager.isAuto(empire);
+                MilitaryPosture cur = ConflictManager.posture(empire);
+                styleMil(bAuto, auto);
+                for (MilitaryPosture mp : MilitaryPosture.values())
+                    styleMil(postureBtns.get(mp), !auto && mp == cur);
             } finally {
                 engine.unlock();
             }
@@ -163,5 +209,11 @@ public class GovernancePanel {
         scroll.setPrefViewportHeight(440);
         scroll.setStyle("-fx-background:#1c1c1e; -fx-background-color:#1c1c1e;");
         return scroll;
+    }
+
+    private static void styleMil(Button b, boolean on) {
+        b.setStyle("-fx-text-fill:white; -fx-font-size:12px; -fx-background-radius:6; -fx-padding:4 10; -fx-cursor:hand; "
+                + "-fx-background-color:" + (on ? "#4a4528" : "#2b2b2b") + ";"
+                + (on ? " -fx-border-color:#a89a5c; -fx-border-radius:6;" : ""));
     }
 }

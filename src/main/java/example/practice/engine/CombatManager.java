@@ -83,15 +83,20 @@ public class CombatManager {
         Logger.logEvent("Survivors: " + (imperialCombatants - imperialCasualties) + " Imperials | " + (rebelCombatants - rebelCasualties) + " Rebels", MILITARY);
     }
 
-    // --- RANDOM HOURLY SKIRMISHES ---
+    // --- ORGANIC SKIRMISHES (now gated by the conflict state) ---
     public static void triggerHourlySkirmish(Kingdom kingdom, List<Human> population) {
         if (!kingdom.isActive || kingdom.storySkirmishOverride == -1) return;
 
-        int chance = (int) Battle.HOURLY_SKIRMISH_BASE_CHANCE_PERCENT.value;
-        if (kingdom.storySkirmishOverride == 1) chance = 100;
-
-        if ((Math.random() * 100) > chance) return;
-        kingdom.storySkirmishOverride = 0;
+        // Scripted story battles (override == 1) fire regardless. Organic battles
+        // must pass the conflict gate: ConflictManager only allows them in
+        // INSURGENCY/CIVIL_WAR, throttled to a couple a day. This is what ends the
+        // peacetime skirmish grind -- at PEACE/TENSION nothing fires here at all.
+        boolean forced = (kingdom.storySkirmishOverride == 1);
+        if (forced) {
+            kingdom.storySkirmishOverride = 0;          // consume the scripted trigger
+        } else if (!ConflictManager.tryEngage(kingdom)) {
+            return;
+        }
 
         Battalion soldiersFull = new Battalion(0, 0, 0, 0);
         Battalion rebelsFull   = new Battalion(0, 0, 0, 0);
@@ -133,6 +138,10 @@ public class CombatManager {
         if (generals > 0)     sDmg *= (1.0f + (Combat.GENERAL_COMBAT_BONUS.value - 1.0f) * generals);
         if (rebelLeaders > 0) rDmg *= (1.0f + (Combat.REBEL_LEADER_COMBAT_BONUS.value - 1.0f) * rebelLeaders);
 
+        // Named leaders (agents): Castius stiffens the army, Joric sharpens the rebels.
+        sDmg *= ConflictManager.imperialMul(kingdom);
+        rDmg *= ConflictManager.rebelMul(kingdom);
+
         Logger.logEvent("SKIRMISH! " + sBatch.initialCount + " Imperials vs " + rBatch.initialCount + " Rebels.", MILITARY);
 
         int residualSoldierCount = sBatch.initialCount;
@@ -164,9 +173,6 @@ public class CombatManager {
         int rLoss = residualRebelCount   - rBatch.getEffectiveCount();
         kingdom.inflictProportionalCasualties(population, kingdom.id, Math.max(0, sLoss), Math.max(0, rLoss));
 
-        // FIX: morale and the summary now follow who actually held the field (the same
-        // effective-count test declareResult used), so a victory can no longer also
-        // log "suffered a setback". One coherent outcome per skirmish.
         boolean empireHeldField = sBatch.getEffectiveCount() >= rBatch.getEffectiveCount();
         if (empireHeldField) {
             kingdom.modifyMorale((int) Battle.MORALE_GAIN_ON_VICTORY.value);

@@ -14,33 +14,34 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * One place that turns a character NAME into a portrait. Panels call
- * Portraits.avatar(name, size) and get a round portrait back -- or, if that
- * character's image isn't on disk yet, a neutral lettered placeholder (so the
- * not-yet-generated faces never crash anything).
+ * Turns a character NAME into a round portrait -- but spoiler-safe: until the
+ * story has *presented* a character, they show the shared SILHOUETTE. Once
+ * revealed (see CharacterReveal), their real face shows everywhere (council
+ * bubbles, character window, agent panel).
  *
- * SWAPPING ART LATER: just replace the .png file with the same name. No code
- * changes. Regenerated your Emperor in OpenAI? Drop it over The_Emperor.png.
+ * Reveal state is intentionally not persisted: CharacterReveal.revealAllUpTo()
+ * rebuilds it from the current story position on load/startup, so it can never
+ * drift from where the player actually is.
  *
- * WHERE THE FILES GO (it checks these in order):
- *   1. a folder you set explicitly:  Portraits.setDirectory("C:/.../portraits");
- *   2. the classpath:                 /portraits/<file>.png   (resources folder)
- *   3. a "portraits" folder next to where the game runs:  ./portraits/<file>.png
- * Pick whichever is easiest; option 3 (a plain "portraits" folder in your
- * project root) needs zero build setup.
+ * Files live in a "portraits" folder (project root works with no build setup),
+ * or the classpath /portraits/, or a folder set via setDirectory(). Drop in
+ * silhouette.png alongside the character images.
  */
 public final class Portraits {
 
     private Portraits() {}
 
-    private static String directory = null;                  // optional explicit folder
+    private static String directory = null;
     public static void setDirectory(String dir) { directory = dir; }
 
-    // name (normalised) -> file name. Aliases let titles, first names, and full
-    // names all resolve to the same portrait.
+    private static final String SILHOUETTE = "silhouette.png";
+
+    // name (normalised) -> file
     private static final Map<String, String> FILES = new HashMap<>();
     static {
         alias("Dusk_Bane.png",       "kaelen duskbane", "duskbane", "kaelen", "the blade");
@@ -53,101 +54,118 @@ public final class Portraits {
         alias("The_Speaker.png",     "the speaker", "speaker", "the unmoved", "house speaker");
         alias("The_Emperor.png",     "the emperor", "emperor");
     }
-    private static void alias(String file, String... names) {
-        for (String n : names) FILES.put(n, file);
-    }
+    private static void alias(String file, String... names) { for (String n : names) FILES.put(n, file); }
 
     private static final Map<String, Image> CACHE = new HashMap<>();
 
-    /** True if a real portrait file resolved (vs. falling back to initials). */
-    public static boolean has(String name) { return image(name) != null; }
+    // which portrait files have been revealed. The Emperor (you) and Castius
+    // (your commander) are known from the start; everyone else is earned.
+    private static final Set<String> revealed = new HashSet<>();
+    static { revealed.add("The_Emperor.png"); revealed.add("General_Castius.png"); }
 
-    /**
-     * A round portrait Node at the given diameter. Real image if available,
-     * otherwise a lettered circle in a colour seeded from the name.
-     */
+    public static void reveal(String name) {
+        String f = FILES.get(norm(name));
+        if (f != null) revealed.add(f);
+    }
+    public static boolean isRevealed(String name) {
+        String f = FILES.get(norm(name));
+        return f != null && revealed.contains(f);
+    }
+
+    /** Gated portrait: silhouette until the character has been presented in-story. */
     public static Node avatar(String name, double size) {
-        Image img = image(name);
-        Circle ring = new Circle(size / 2.0);
-        ring.setFill(Color.TRANSPARENT);
-        ring.setStroke(Color.web("#0d0e0a"));
-        ring.setStrokeWidth(2);
+        String f = FILES.get(norm(name));
+        if (f != null && revealed.contains(f)) return realNode(f, size, name);
+        return silhouette(size);
+    }
 
-        StackPane pane = new StackPane();
-        pane.setMinSize(size, size);
-        pane.setPrefSize(size, size);
-        pane.setMaxSize(size, size);
+    /** The real portrait regardless of reveal state -- used by the reveal animation. */
+    public static Node realAvatar(String name, double size) {
+        return realNode(FILES.get(norm(name)), size, name);
+    }
 
+    /** The shared "unknown figure" silhouette. */
+    public static Node silhouette(double size) {
+        Image img = loadCached(SILHOUETTE);
+        StackPane p = fixed(size);
         if (img != null) {
-            ImageView iv = new ImageView(img);
-            iv.setFitWidth(size);
-            iv.setFitHeight(size);
-            iv.setPreserveRatio(true);          // fill-crop look; portraits are ~square/tall
-            Circle clip = new Circle(size / 2.0, size / 2.0, size / 2.0);
-            iv.setClip(clip);
-            pane.getChildren().addAll(iv, ring);
+            p.getChildren().addAll(clipped(img, size), ring(size));
+        } else {
+            Circle bg = new Circle(size / 2.0, Color.web("#2a2e35"));
+            Text q = new Text("?");
+            q.setFill(Color.web("#5b6470"));
+            q.setFont(Font.font("Georgia", FontWeight.BOLD, size * 0.5));
+            p.getChildren().addAll(bg, q, ring(size));
+        }
+        return p;
+    }
+
+    // --- internals ----------------------------------------------------------
+    private static Node realNode(String file, double size, String name) {
+        Image img = (file == null) ? null : loadCached(file);
+        StackPane p = fixed(size);
+        if (img != null) {
+            p.getChildren().addAll(clipped(img, size), ring(size));
         } else {
             Circle bg = new Circle(size / 2.0, seededColor(name));
             Text letter = new Text(initial(name));
             letter.setFill(Color.web("#0d0e0a"));
             letter.setFont(Font.font("Georgia", FontWeight.BOLD, size * 0.45));
-            pane.getChildren().addAll(bg, letter, ring);
+            p.getChildren().addAll(bg, letter, ring(size));
         }
-        return pane;
+        return p;
     }
 
-    // --- loading ------------------------------------------------------------
-    private static Image image(String name) {
-        if (name == null) return null;
-        String file = FILES.get(normalise(name));
+    private static StackPane fixed(double size) {
+        StackPane p = new StackPane();
+        p.setMinSize(size, size); p.setPrefSize(size, size); p.setMaxSize(size, size);
+        return p;
+    }
+    private static ImageView clipped(Image img, double size) {
+        ImageView iv = new ImageView(img);
+        iv.setFitWidth(size); iv.setFitHeight(size); iv.setPreserveRatio(true);
+        iv.setClip(new Circle(size / 2.0, size / 2.0, size / 2.0));
+        return iv;
+    }
+    private static Circle ring(double size) {
+        Circle ring = new Circle(size / 2.0);
+        ring.setFill(Color.TRANSPARENT);
+        ring.setStroke(Color.web("#0d0e0a"));
+        ring.setStrokeWidth(2);
+        return ring;
+    }
+
+    private static Image loadCached(String file) {
         if (file == null) return null;
         if (CACHE.containsKey(file)) return CACHE.get(file);
-
         Image img = load(file);
-        CACHE.put(file, img);                    // cache nulls too, so we don't retry every frame
+        CACHE.put(file, img);
         return img;
     }
-
     private static Image load(String file) {
-        // 1) explicit directory
         if (directory != null) {
             Image i = fromFile(new File(directory, file));
             if (i != null) return i;
         }
-        // 2) classpath /portraits/<file>
         try (InputStream in = Portraits.class.getResourceAsStream("/portraits/" + file)) {
-            if (in != null) {
-                Image i = new Image(in);
-                if (!i.isError()) return i;
-            }
+            if (in != null) { Image i = new Image(in); if (!i.isError()) return i; }
         } catch (Exception ignored) {}
-        // 3) ./portraits/<file>
         return fromFile(new File("portraits", file));
     }
-
     private static Image fromFile(File f) {
         if (f == null || !f.exists()) return null;
         try (FileInputStream in = new FileInputStream(f)) {
-            Image i = new Image(in);
-            return i.isError() ? null : i;
-        } catch (Exception e) {
-            return null;
-        }
+            Image i = new Image(in); return i.isError() ? null : i;
+        } catch (Exception e) { return null; }
     }
 
-    // --- fallback helpers ---------------------------------------------------
-    private static String normalise(String s) {
-        return s.toLowerCase().replaceAll("[^a-z0-9 ]", "").trim();
-    }
-
+    private static String norm(String s) { return s == null ? "" : s.toLowerCase().replaceAll("[^a-z0-9 ]", "").trim(); }
     private static String initial(String name) {
         String n = name == null ? "" : name.trim();
         return n.isEmpty() ? "?" : n.substring(0, 1).toUpperCase();
     }
-
     private static Color seededColor(String name) {
         int h = (name == null ? 0 : name.hashCode());
-        double hue = Math.abs(h) % 360;
-        return Color.hsb(hue, 0.30, 0.62);       // muted, readable behind dark text
+        return Color.hsb(Math.abs(h) % 360, 0.30, 0.62);
     }
 }
