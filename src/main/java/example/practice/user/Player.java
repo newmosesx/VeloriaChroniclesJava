@@ -9,14 +9,14 @@ public class Player {
     public float statHealth, statMaxHealth, statSpeed, statHunger, statExp;
     public int statLevel;
 
-    // RPG specific stats
+    // RPG specific stats (Matches C code placeholders)
     public int strength;
     public int intellect;
     public int charisma;
     public int age;
 
     // Equipment
-    public String userHead, userTorso, userLegs, userFeet;
+    public String userHead, userTorso, userLegs, userFoots;
     public String rightHand, leftHand;
 
     public Player(String name) {
