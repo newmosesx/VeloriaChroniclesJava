@@ -5,6 +5,7 @@ import example.practice.engine.*;
 import example.practice.kingdoms.Kingdom;
 import example.practice.story.CharacterData;
 import example.practice.story.StoryData;
+import example.practice.story.StoryRouter;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.util.Duration;
@@ -36,6 +37,12 @@ public class MainGUI extends Application {
     private int currentChapter = 0;
     private int currentParagraph = 0;
     private boolean[] chapterCompleted;
+
+    // Records the path the reader actually walked (chapter + paragraph), so
+    // "Previous Chapter" follows the route back where they came from rather than
+    // stepping blindly through file order. Pushed whenever we move to a NEW
+    // chapter; popped by Previous. Empty -> fall back to a linear step (author aid).
+    private final java.util.Deque<int[]> chapterHistory = new java.util.ArrayDeque<>();
 
     private boolean battleShowing = false;
 
@@ -249,6 +256,7 @@ public class MainGUI extends Application {
                     SaveManager.load(engine, f);
                     currentChapter = engine.sharedData.currentStoryChapter;
                     currentParagraph = engine.sharedData.currentStoryParagraph;
+                    chapterHistory.clear();   // a loaded game starts a fresh trail
                     updateStoryView();   // snap the story panel to the restored position
                 } catch (Exception ex) { showError("Load failed", ex); }
             }
@@ -268,12 +276,20 @@ public class MainGUI extends Application {
         // EXPLICIT CHAPTER NAVIGATION
         btnPrevChapter = createStyledButton("Previous Chapter");
         btnPrevChapter.setOnAction(e -> {
-            if (currentChapter > 0) { currentChapter--; currentParagraph = 0; updateStoryView(); }
+            if (!chapterHistory.isEmpty()) {
+                int[] prev = chapterHistory.pop();        // follow the route back
+                currentChapter = prev[0];
+                currentParagraph = prev[1];
+                updateStoryView();
+            } else if (currentChapter > 0) {              // author fallback: linear step
+                currentChapter--; currentParagraph = 0; updateStoryView();
+            }
         });
 
         btnNextChapter = createStyledButton("Next Chapter");
         btnNextChapter.setOnAction(e -> {
-            if (currentChapter < StoryData.CHAPTERS.size() - 1) { currentChapter++; currentParagraph = 0; updateStoryView(); }
+            int nx = StoryData.nextIndexOf(currentChapter);
+            if (nx >= 0) goToChapter(nx);                 // records history + refreshes
         });
 
         // COMBO BOX CHARACTERS
@@ -312,6 +328,13 @@ public class MainGUI extends Application {
     }
 
     private void advanceParagraph() {
+
+        int jump = StoryRouter.consumeJumpIndex();
+        if (jump >= 0) {
+            goToChapter(jump);    // records the chapter we're leaving, then jumps
+            return;
+        }
+
         if (currentParagraph < StoryData.CHAPTERS.get(currentChapter).paragraphs.length - 1) {
             int next = currentParagraph + 1;
 
@@ -341,6 +364,18 @@ public class MainGUI extends Application {
             currentParagraph--;
             updateStoryView();
         }
+    }
+
+    // Move to a new chapter while remembering where we left, so Previous can
+    // retrace the exact path (the route back where you came). Records the
+    // departure point only when we actually change chapters.
+    private void goToChapter(int target) {
+        if (target < 0 || target >= StoryData.CHAPTERS.size()) return;
+        if (target != currentChapter)
+            chapterHistory.push(new int[]{ currentChapter, currentParagraph });
+        currentChapter = target;
+        currentParagraph = 0;
+        updateStoryView();
     }
 
     private Region createChatBubble(String senderName, String message, boolean isPlayer) {
@@ -385,7 +420,7 @@ public class MainGUI extends Application {
         }
 
         // Check if we are in the Debate Chapter (Index 8)
-        boolean isDebateMode = (currentChapter == 8);
+        boolean isDebateMode = StoryData.isDebate(currentChapter);
 
         if (isDebateMode) {
             // Hide Story, Show Debate
@@ -462,8 +497,13 @@ public class MainGUI extends Application {
             chapterCompleted[currentChapter] = true;
         }
 
-        btnPrevChapter.setDisable(currentChapter == 0);
-        btnNextChapter.setDisable(!chapterCompleted[currentChapter] || currentChapter == StoryData.CHAPTERS.size() - 1);
+        btnPrevChapter.setDisable(chapterHistory.isEmpty() && currentChapter == 0);
+
+        boolean choicePending = DebateManager.hasChoices(currentChapter, currentParagraph)
+                && DebateManager.chosenResponse == null;
+        btnNextChapter.setDisable(choicePending
+                || !chapterCompleted[currentChapter]
+                || StoryData.nextIndexOf(currentChapter) < 0);
 
         engine.updateStoryPosition(currentChapter, currentParagraph);
     }

@@ -7,14 +7,26 @@ import example.practice.story.Council;
 import example.practice.story.CouncilMember;
 import example.practice.story.DialogueToken;
 import example.practice.story.Disposition;
+import example.practice.story.StoryData;
+import example.practice.story.StoryRouter;
 
 import java.util.ArrayList;
 import java.util.List;
 
 // Public API (chosenResponse, Choice, hasChoices, getChoices, handleTimeout) is
-// unchanged so MainGUI keeps working. What changed: each choice now speaks a
-// DialogueToken to the council, and the kingdom-level fallout (unrest, morale)
-// is DERIVED from how the council feels afterward - not flat magic numbers.
+// unchanged so MainGUI keeps working. What changed: choices are no longer
+// hardcoded to chapter 8 - they come from story.json (any chapter, any
+// paragraph, any number of routes). Each choice still speaks a DialogueToken to
+// the council, and the kingdom-level fallout is DERIVED from how the council
+// feels afterward - the micro -> macro bridge is untouched.
+//
+// EFFECTS vocabulary (the "effects" array on a choice in story.json):
+//   "gold:-25000"     adjust the empire's treasury (negative = spend)
+//   "morale:-10"      adjust army morale
+//   "limitersOff"     remove the safety rails (limitersDisabled = true)
+//   "desertion:0.10"  that fraction of troops defects
+// Unknown effects are logged and skipped, never fatal - so a typo in the JSON
+// can't crash the game mid-debate.
 public class DebateManager {
 
     public static String chosenResponse = null;
@@ -33,47 +45,73 @@ public class DebateManager {
     }
 
     public static boolean hasChoices(int chapterIndex, int paragraphIndex) {
-        return chapterIndex == 8 && paragraphIndex == 18;
+        StoryData.Chapter ch = StoryData.chapterAt(chapterIndex);
+        return ch != null && ch.choiceAt == paragraphIndex && !ch.choices.isEmpty();
     }
 
     public static List<Choice> getChoices(int chapterIndex, int paragraphIndex, SimulationEngine engine) {
-        List<Choice> choices = new ArrayList<>();
-        List<Human> pop = engine.getWorldPopulation();
+        List<Choice> out = new ArrayList<>();
+        StoryData.Chapter ch = StoryData.chapterAt(chapterIndex);
+        if (ch == null || ch.choiceAt != paragraphIndex) return out;
 
-        if (!(chapterIndex == 8 && paragraphIndex == 18)) return choices;
-
-        choices.add(new Choice("1. \"I was securing the future!\" (Authority)", () -> {
-            council.applyToAll(DialogueToken.AUTHORITY);
-            resolveCouncilOutcome(engine, "I was securing the future! We did what was necessary.");
-        }));
-
-        choices.add(new Choice("2. \"We must unite in this crisis.\" (Diplomacy)", () -> {
-            council.applyToAll(DialogueToken.DIPLOMACY);
-            engine.getKingdoms()[0].gold -= 25000; // funds diverted to public aid
-            resolveCouncilOutcome(engine, "We must unite in this crisis. Let funds be diverted to the people.");
-        }));
-
-        choices.add(new Choice("3. \"Silence! Guards, arrest this fool!\" (Tyranny)", () -> {
-            council.applyToAll(DialogueToken.TYRANNY);
-            Kingdom empire = engine.getKingdoms()[0];
-            empire.limitersDisabled = true;          // the edict still removes the safety rails
-            empire.triggerMassDesertion(pop, 0.10);  // 10% of troops defect
-            resolveCouncilOutcome(engine, "Silence! Guards, arrest this fool immediately!");
-        }));
-
-        return choices;
+        for (StoryData.ChoiceSpec spec : ch.choices) {
+            out.add(new Choice(spec.label, () -> {
+                speak(spec.token);
+                applyEffects(engine, spec.effects);
+                if (spec.gotoId != null) StoryRouter.jumpTo(spec.gotoId);
+                resolveCouncilOutcome(engine, spec.response);
+            }));
+        }
+        return out;
     }
 
     public static void handleTimeout(int chapterIndex, int paragraphIndex, SimulationEngine engine) {
-        if (chapterIndex == 8 && paragraphIndex == 18) {
-            council.applyToAll(DialogueToken.SILENCE);
-            resolveCouncilOutcome(engine, "... (The Emperor stammers in silence)");
+        StoryData.Chapter ch = StoryData.chapterAt(chapterIndex);
+        if (ch == null || ch.choiceAt != paragraphIndex) return;
+
+        StoryData.TimeoutSpec t = ch.timeout != null ? ch.timeout : new StoryData.TimeoutSpec();
+        speak(t.token);
+        if (t.gotoId != null) StoryRouter.jumpTo(t.gotoId);
+        resolveCouncilOutcome(engine, t.response);
+    }
+
+    // ------------------------------------------------------------- internals
+    private static void speak(String tokenName) {
+        if (tokenName == null) return;
+        try {
+            council.applyToAll(DialogueToken.valueOf(tokenName));
+        } catch (IllegalArgumentException ex) {
+            Logger.logEvent("story.json: unknown DialogueToken '" + tokenName
+                    + "' - the council hears nothing.", Logger.LogCategory.POLITICAL);
         }
     }
 
-    // The micro -> macro bridge. Unrest and morale now come from the council's
-    // mood, so the same choice can play out very differently depending on the
-    // relationships you've built (or burned) up to this point.
+    private static void applyEffects(SimulationEngine engine, List<String> effects) {
+        if (effects == null) return;
+        Kingdom empire = engine.getKingdoms()[0];
+        List<Human> pop = engine.getWorldPopulation();
+        for (String e : effects) {
+            try {
+                String[] f = e.split(":", 2);
+                switch (f[0].trim()) {
+                    case "gold":        empire.gold += Integer.parseInt(f[1].trim()); break;
+                    case "morale":      empire.modifyMorale(Integer.parseInt(f[1].trim())); break;
+                    case "limitersOff": empire.limitersDisabled = true; break;
+                    case "desertion":   empire.triggerMassDesertion(pop, Double.parseDouble(f[1].trim())); break;
+                    default:
+                        Logger.logEvent("story.json: unknown effect '" + e + "' - skipped.",
+                                Logger.LogCategory.POLITICAL);
+                }
+            } catch (Exception ex) {
+                Logger.logEvent("story.json: bad effect '" + e + "' - skipped.",
+                        Logger.LogCategory.POLITICAL);
+            }
+        }
+    }
+
+    // The micro -> macro bridge. Unrest and morale come from the council's mood,
+    // so the same choice plays out differently depending on the relationships
+    // you've built (or burned) up to this point. Unchanged from before.
     private static void resolveCouncilOutcome(SimulationEngine engine, String response) {
         chosenResponse = response;
         Kingdom empire = engine.getKingdoms()[0];
@@ -93,6 +131,7 @@ public class DebateManager {
             sb.append("   ");
         }
         Logger.logEvent(sb.toString().trim(), Logger.LogCategory.POLITICAL);
-        Logger.logEvent("Chamber unrest swing: " + (unrestSwing >= 0 ? "+" : "") + unrestSwing, Logger.LogCategory.POLITICAL);
+        Logger.logEvent("Chamber unrest swing: " + (unrestSwing >= 0 ? "+" : "") + unrestSwing,
+                Logger.LogCategory.POLITICAL);
     }
 }

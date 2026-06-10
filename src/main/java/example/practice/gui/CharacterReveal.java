@@ -49,14 +49,18 @@ public final class CharacterReveal {
     // Reveal beats, pinned to the real prose in StoryData.
     private static final List<Beat> BEATS = new ArrayList<>();
     static {
-        BEATS.add(new Beat(0, 1, new Figure("Kaelen Duskbane", "The Mercenary")));
-        BEATS.add(new Beat(0, 3,
-                new Figure("Lyra Veylen", "The Fugitive Healer"),
-                new Figure("Bram Thorne", "The Disgraced Knight"),
-                new Figure("Iriah Sable", "The Rogue")));
-        BEATS.add(new Beat(1, 8, new Figure("Mara Voss", "Wanted \u00b7 Traitorous Magistrate")));
-        BEATS.add(new Beat(7, 4, new Figure("Joric Fen", "Former Garrison Captain")));
-        BEATS.add(new Beat(8, 0, new Figure("House Speaker", "Speaker of the House")));
+        java.util.Map<Long, java.util.List<Figure>> grouped = new java.util.LinkedHashMap<>();
+        for (example.practice.story.StoryData.CharacterBeat cb
+                : example.practice.story.StoryData.characterBeats()) {
+            long key = ((long) cb.chapterIndex << 32) | (cb.paragraph & 0xffffffffL);
+            grouped.computeIfAbsent(key, k -> new java.util.ArrayList<>())
+                    .add(new Figure(cb.name, cb.subtitle));
+        }
+        for (java.util.Map.Entry<Long, java.util.List<Figure>> e : grouped.entrySet()) {
+            int ch = (int) (e.getKey() >> 32);
+            int p  = (int) (e.getKey() & 0xffffffffL);
+            BEATS.add(new Beat(ch, p, e.getValue().toArray(new Figure[0])));
+        }
     }
 
     /** If a reveal sits exactly here and someone is still hidden, return its figures (to animate). */

@@ -4,10 +4,7 @@ import example.practice.agents.Agent;
 import example.practice.agents.AgentRoster;
 import example.practice.config.EdictType;
 import example.practice.config.KingdomArchetype;
-import example.practice.engine.DebateManager;
-import example.practice.engine.Faction;
-import example.practice.engine.PoliticsManager;
-import example.practice.engine.SimulationEngine;
+import example.practice.engine.*;
 import example.practice.events.EventSystem;
 import example.practice.humans.Human;
 import example.practice.kingdoms.Kingdom;
@@ -57,6 +54,8 @@ public final class SaveManager {
             World w = engine.getWorld();
             b.append("VSAVE|").append(VERSION).append('\n');
             b.append(row("ENG", engine.getDay(), engine.getHour()));
+
+            b.append(row("PWX", PublicWorksManager.export()));
 
             ShareData sh = engine.sharedData;
             b.append(row("SHD", s(sh.civilWarStatus), sh.currentStoryChapter, sh.currentStoryParagraph,
@@ -177,6 +176,7 @@ public final class SaveManager {
                         p.rightHand = u(f[x++]); p.leftHand = u(f[x++]);
                         break;
                     }
+                    case "PWX": PublicWorksManager.importBlob(rest); break;
                     case "K": {
                         int id = in(f[0]);
                         if (id < 0 || id >= ks.length) break;

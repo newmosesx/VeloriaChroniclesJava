@@ -21,6 +21,11 @@ import static example.practice.logger.Logger.LogCategory.POLITICAL;
 // overcrowded, a raid when the army is thin. Every effect acts THROUGH a system
 // (soil, food, population, resources, faction grievance) and never pokes unrest.
 // Each event type has a per-kingdom cooldown so the world breathes instead of spams.
+//
+// DEEPENED: events now have SEVERITY (how far past the threshold the world is
+// scales both the odds and the bite), and they leave SCARCITY behind (EventAftermath)
+// that decays over days and feeds two CHAINED events - bread riots and price
+// gouging - so a bad season compounds into a crisis instead of resetting each day.
 public class EventSystem {
 
     private static final int N = EventType.values().length;
@@ -30,11 +35,15 @@ public class EventSystem {
     public static void process(Kingdom k, List<Human> population, World world, int day) {
         if (!k.isActive || k.population < 50) return;
 
-        int pop = 0, soldiers = 0;
+        // The wake of past disasters fades a little each day before we scan.
+        EventAftermath.decay(k.id);
+
+        int pop = 0, soldiers = 0, producers = 0;
         for (Human h : population) {
             if (!h.isAlive || h.kingdomId != k.id) continue;
             pop++;
             if (h.job >= 6 && h.job <= 8) soldiers++;
+            else if (h.job >= 1 && h.job <= 5) producers++;
         }
         if (pop <= 0) return;
         float armyShare = soldiers / (float) pop;
@@ -49,41 +58,64 @@ public class EventSystem {
 
     private static boolean tryFire(EventType e, Kingdom k, List<Human> pop, World world, int population, float armyShare) {
         switch (e) {
-            case DROUGHT:
+            case DROUGHT: {
                 if (!world.calendar.growingSeason) return false;
-                if (avgSoil(world) >= EventConfig.DROUGHT_SOIL_THRESHOLD.value) return false;
-                if (!roll(EventConfig.FIRE_CHANCE.value)) return false;
+                float soil = avgSoil(world);
+                if (soil >= EventConfig.DROUGHT_SOIL_THRESHOLD.value) return false;
+                // severity: how far BELOW the dryness line we are (0..1).
+                float sev = severity(EventConfig.DROUGHT_SOIL_THRESHOLD.value - soil,
+                        EventConfig.DROUGHT_SOIL_THRESHOLD.value);
+                if (!rollWithSeverity(sev)) return false;
+                float hit = EventConfig.DROUGHT_SOIL_HIT.value * scale(sev);
                 for (int s = 0; s < world.agriculture.soilMoisture.length; s++)
-                    world.agriculture.soilMoisture[s] = Math.max(0f,
-                            world.agriculture.soilMoisture[s] - EventConfig.DROUGHT_SOIL_HIT.value);
-                Logger.logEvent("A drought grips " + k.name + " - the soil cracks.", NATURAL);
+                    world.agriculture.soilMoisture[s] = Math.max(0f, world.agriculture.soilMoisture[s] - hit);
+                EventAftermath.addScarcity(k.id, EventConfig.SCARCITY_FROM_DROUGHT.value * scale(sev));
+                Logger.logEvent(sevWord(sev) + " drought grips " + k.name + " - the soil cracks.", NATURAL);
                 return true;
+            }
 
-            case FLOOD:
-                if (maxFlood(world) < EventConfig.FLOOD_SEVERITY_THRESHOLD.value) return false;
-                if (!roll(EventConfig.FIRE_CHANCE.value)) return false;
-                aggravate(k, FactionType.COMMONS, EventConfig.SHOCK_AGGRAVATE.value);
-                Logger.logEvent("Floodwaters swamp the lowlands of " + k.name + ".", NATURAL);
+            case FLOOD: {
+                float flood = maxFlood(world);
+                if (flood < EventConfig.FLOOD_SEVERITY_THRESHOLD.value) return false;
+                float sev = severity(flood - EventConfig.FLOOD_SEVERITY_THRESHOLD.value,
+                        1f - EventConfig.FLOOD_SEVERITY_THRESHOLD.value);
+                if (!rollWithSeverity(sev)) return false;
+                aggravate(k, FactionType.COMMONS, EventConfig.SHOCK_AGGRAVATE.value * scale(sev));
+                EventAftermath.addScarcity(k.id, EventConfig.SCARCITY_FROM_FLOOD.value * scale(sev));
+                Logger.logEvent(sevWord(sev) + " flood swamps the lowlands of " + k.name + ".", NATURAL);
                 return true;
+            }
 
-            case PLAGUE:
-                if (world.agriculture.landDensityForKingdom(k.id, population) >= EventConfig.PLAGUE_DENSITY_THRESHOLD.value) return false;
-                if (!roll(EventConfig.FIRE_CHANCE.value)) return false;
-                killCivilians(pop, k.id, (int) (population * EventConfig.PLAGUE_DEATH_FRACTION.value));
-                aggravate(k, FactionType.CLERGY, EventConfig.SHOCK_AGGRAVATE.value);
-                aggravate(k, FactionType.COMMONS, EventConfig.SHOCK_AGGRAVATE.value);
-                Logger.logEvent("Plague spreads through the crowded quarters of " + k.name + ".", NATURAL);
+            case PLAGUE: {
+                float density = world.agriculture.landDensityForKingdom(k.id, population);
+                if (density >= EventConfig.PLAGUE_DENSITY_THRESHOLD.value) return false;
+                float sev = severity(EventConfig.PLAGUE_DENSITY_THRESHOLD.value - density,
+                        EventConfig.PLAGUE_DENSITY_THRESHOLD.value);
+                if (!rollWithSeverity(sev)) return false;
+                killCivilians(pop, k.id, (int) (population * EventConfig.PLAGUE_DEATH_FRACTION.value * scale(sev)));
+                aggravate(k, FactionType.CLERGY, EventConfig.SHOCK_AGGRAVATE.value * scale(sev));
+                aggravate(k, FactionType.COMMONS, EventConfig.SHOCK_AGGRAVATE.value * scale(sev));
+                EventAftermath.addScarcity(k.id, EventConfig.SCARCITY_FROM_PLAGUE.value * scale(sev));
+                Logger.logEvent(sevWord(sev) + " plague spreads through the crowded quarters of " + k.name + ".", NATURAL);
                 return true;
+            }
 
-            case BARBARIAN_RAID:
+            case BARBARIAN_RAID: {
                 if (armyShare >= EventConfig.RAID_ARMY_SHARE_THRESHOLD.value) return false;
-                if (!roll(EventConfig.FIRE_CHANCE.value)) return false;
-                k.wood = (int) (k.wood * (1f - EventConfig.RAID_RESOURCE_LOSS.value));
-                k.stone = (int) (k.stone * (1f - EventConfig.RAID_RESOURCE_LOSS.value));
-                killCivilians(pop, k.id, (int) (population * EventConfig.RAID_DEATH_FRACTION.value));
-                aggravate(k, FactionType.NOBILITY, EventConfig.SHOCK_AGGRAVATE.value);
-                Logger.logEvent("Barbarians raid the under-defended borders of " + k.name + "!", MILITARY);
+                // A weakened, scarce realm is a riper target.
+                float sev = severity(EventConfig.RAID_ARMY_SHARE_THRESHOLD.value - armyShare,
+                        EventConfig.RAID_ARMY_SHARE_THRESHOLD.value);
+                sev = Math.min(1f, sev + 0.5f * EventAftermath.scarcity(k.id));
+                if (!rollWithSeverity(sev)) return false;
+                float loss = EventConfig.RAID_RESOURCE_LOSS.value * scale(sev);
+                k.wood = (int) (k.wood * (1f - loss));
+                k.stone = (int) (k.stone * (1f - loss));
+                killCivilians(pop, k.id, (int) (population * EventConfig.RAID_DEATH_FRACTION.value * scale(sev)));
+                aggravate(k, FactionType.NOBILITY, EventConfig.SHOCK_AGGRAVATE.value * scale(sev));
+                EventAftermath.addScarcity(k.id, EventConfig.SCARCITY_FROM_RAID.value * scale(sev));
+                Logger.logEvent(sevWord(sev) + " raid strikes the under-defended borders of " + k.name + "!", MILITARY);
                 return true;
+            }
 
             case INTRIGUE: {
                 Faction hot = hottestFaction(k);
@@ -94,21 +126,70 @@ public class EventSystem {
                 return true;
             }
 
-            case BOUNTIFUL_HARVEST:
+            case BOUNTIFUL_HARVEST: {
                 if (!world.calendar.growingSeason) return false;
                 if (world.agriculture.realmAverageYield() < EventConfig.HARVEST_YIELD_THRESHOLD.value) return false;
                 if (!roll(EventConfig.FIRE_CHANCE.value)) return false;
                 k.food += (int) (population * EventConfig.HARVEST_FOOD_PER_HEAD.value);
+                EventAftermath.easeScarcity(k.id, EventConfig.SCARCITY_RELIEF_HARVEST.value); // relief heals the land
                 Logger.logEvent("A bountiful harvest fills the granaries of " + k.name + "!", NATURAL);
                 return true;
+            }
 
             case GOLD_STRIKE:
                 if (!roll(EventConfig.GOLD_STRIKE_CHANCE.value)) return false;
                 k.gold += (int) EventConfig.GOLD_STRIKE_AMOUNT.value;
                 Logger.logEvent("A vein of gold is struck in " + k.name + "!", NATURAL);
                 return true;
+
+            // --- CHAINED: only when an earlier disaster left scarcity behind ---
+            case BREAD_RIOT: {
+                float scar = EventAftermath.scarcity(k.id);
+                if (scar < EventConfig.RIOT_SCARCITY_THRESHOLD.value) return false;
+                // hunger sharpens it - the granary, not the fields.
+                float sev = Math.min(1f, scar);
+                if (!rollWithSeverity(sev)) return false;
+                killCivilians(pop, k.id, (int) (population * EventConfig.RIOT_DEATH_FRACTION.value * scale(sev)));
+                aggravate(k, FactionType.COMMONS, EventConfig.SHOCK_AGGRAVATE.value * 1.5f * scale(sev));
+                Logger.logEvent("Hunger boils over - bread riots erupt in the streets of " + k.name + ".", POLITICAL);
+                return true;
+            }
+
+            case PRICE_GOUGING: {
+                float scar = EventAftermath.scarcity(k.id);
+                if (scar < EventConfig.GOUGING_SCARCITY_THRESHOLD.value) return false;
+                float sev = Math.min(1f, scar);
+                if (!roll(EventConfig.FIRE_CHANCE.value)) return false;
+                k.gold += (int) (EventConfig.GOUGING_GOLD_GAIN.value * scale(sev)); // skimmed off relief
+                aggravate(k, FactionType.MERCHANTS, EventConfig.SHOCK_AGGRAVATE.value * 0.5f);  // emboldened
+                aggravate(k, FactionType.COMMONS, EventConfig.SHOCK_AGGRAVATE.value * scale(sev)); // and resented
+                Logger.logEvent("Merchants profiteer on the shortage in " + k.name + " while the poor go without.", POLITICAL);
+                return true;
+            }
         }
         return false;
+    }
+
+    // --- severity helpers ---------------------------------------------------
+    // How far past a threshold we are, normalised 0..1 by the headroom available.
+    private static float severity(float overshoot, float headroom) {
+        if (headroom <= 0f) return 1f;
+        return Math.max(0f, Math.min(1f, overshoot / headroom));
+    }
+    // Effect multiplier: a marginal event ~1.0x, a catastrophe up to 1 + MAX_BONUS.
+    private static float scale(float sev) {
+        return 1f + EventConfig.SEVERITY_MAX_BONUS.value * sev;
+    }
+    // Worse conditions also surface a little more readily.
+    private static boolean rollWithSeverity(float sev) {
+        float chance = EventConfig.FIRE_CHANCE.value + EventConfig.SEVERITY_FIRE_BONUS.value * sev;
+        return Math.random() < Math.min(0.95f, chance);
+    }
+    // A label so the log reads "A severe drought" vs "A mild drought".
+    private static String sevWord(float sev) {
+        if (sev >= 0.66f) return "A catastrophic";
+        if (sev >= 0.33f) return "A severe";
+        return "A mild";
     }
 
     private static float avgSoil(World w) {

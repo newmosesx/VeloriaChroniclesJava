@@ -174,6 +174,7 @@ public class SimulationEngine implements Runnable {
     private void processDay() {
         world.advanceDay();
         DailyEventTracker.resetDailyFlags();
+        PublicWorksManager.process(kingdoms[0], world);
 
         RebellionManager.checkEmpireCollapse(kingdoms, worldPopulation);
         RebellionManager.checkCivilWarTrigger(kingdoms, worldPopulation, sharedData);
@@ -185,6 +186,7 @@ public class SimulationEngine implements Runnable {
                 EdictManager.processDaily(k, worldPopulation);
                 ConflictManager.process(k, worldPopulation, world, day, roster);
                 PoliticsManager.process(k, worldPopulation, world);
+                DemandManager.process(k, day);
                 if (ConflictManager.stateOf(k) == ConflictState.PEACE) continue;
                 RebellionManager.handleRecruitmentAndDissent(k, worldPopulation);
                 k.tickDivinePenalty();

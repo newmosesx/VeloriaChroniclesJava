@@ -1,6 +1,8 @@
 package example.practice.gui;
 
 import example.practice.engine.ConflictManager;
+import example.practice.engine.PublicWorksManager;
+import example.practice.engine.PublicWorksManager.WorkType;
 import example.practice.engine.SimulationEngine;
 import example.practice.kingdoms.Kingdom;
 import example.practice.world.Agriculture;
@@ -10,12 +12,17 @@ import example.practice.world.Water;
 import example.practice.world.World;
 
 import javafx.animation.Animation;
+import javafx.animation.FadeTransition;
+import javafx.animation.FillTransition;
 import javafx.animation.KeyFrame;
 import javafx.animation.KeyValue;
+import javafx.animation.ScaleTransition;
 import javafx.animation.Timeline;
+import javafx.animation.TranslateTransition;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.geometry.VPos;
+import javafx.scene.Group;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
@@ -28,6 +35,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
+import javafx.scene.shape.Line;
 import javafx.scene.shape.Polygon;
 import javafx.scene.shape.Polyline;
 import javafx.scene.shape.StrokeLineCap;
@@ -40,20 +48,25 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The in-game world map -- a stylized cartographic view of Veloria's eight
- * compass territories, tinted live by a selectable metric. The center is the
- * Imperial Seat (the capital), NOT a ninth region: there are exactly eight
- * surveyed sectors, matching the simulation's eight CompassDirection sectors.
+ * The in-game world map, now a COMMAND surface, not just a survey. Click a
+ * territory and a command drawer slides over the map's right edge: the full
+ * live readout (soil, yield, flood, river, snowpack, levee line) plus three
+ * public works the throne can order on the spot - levee, irrigation, granary -
+ * paid in wood/stone/gold and raised over days you can watch tick down.
+ * Completed works are drawn on the map as small structure glyphs.
  *
- * USAGE (drop-in, like GovernancePanel):
+ * The map also breathes: floodwater pulses over swamped sectors, rain (or
+ * snow, below freezing) falls where the weather fronts are, the Imperial Seat
+ * has a heartbeat, rivers flow, and metric tints cross-fade when switched.
+ *
+ * USAGE is unchanged - a drop-in replacement:
  *     Region map = MapPanel.build(engine);
- *     centerContainer.getChildren().add(map);     // centerContainer is your StackPane
+ *     centerContainer.getChildren().add(map);
  *     map.setVisible(false); map.setManaged(false);
  *
- * DATA: every read from the simulation lives in sampleWorld() and is now LIVE --
- * soil/yield/crop from Agriculture, flood from Water, temperature from Climate,
- * region names from Geography, unrest from the empire kingdom. Sector id == the
- * CompassDirection ordinal (id == kingdom id), so cell->sector mapping is fixed.
+ * DATA: every read from the simulation lives in sampleWorld() and is LIVE.
+ * Sector id == the CompassDirection ordinal (id == kingdom id). Build orders
+ * go through PublicWorksManager under the engine lock.
  */
 public final class MapPanel {
 
@@ -75,17 +88,21 @@ public final class MapPanel {
             this.loT = loT; this.hiT = hiT;
         }
     }
-    // temperature tint range (degrees C) -> 0..1
     private static final double HEAT_LO = -5, HEAT_HI = 35;
 
     // ---- one territory -----------------------------------------------------
     private static final class Sector {
         final String dir, region; final boolean capital;
-        final int id;                         // world sector id; -1 for the capital
-        double soil, yield, flood, tempC;     // live values
-        double control = 1.0;                 // +1 fully loyal .. -1 fully rebel
-        String crop = "";
+        final int id;                          // world sector id; -1 for the capital
+        double soil, yield, flood, tempC;      // live values
+        double river, snow, levee, precip;     // live values for the drawer + weather
+        double control = 1.0;
+        String crop = "", waterCond = "";
         Polygon poly; Text badge; double cx, cy;
+        Polygon floodOverlay;                  // pulsing water sheet
+        FadeTransition floodPulse;
+        Group weather;                         // rain/snow streaks
+        Text[] workGlyphs = new Text[WorkType.values().length];
         Sector(String dir, String region, boolean capital, int id) {
             this.dir = dir; this.region = region; this.capital = capital; this.id = id;
         }
@@ -104,6 +121,7 @@ public final class MapPanel {
             {{62,352},{204,376},{396,358},{556,372}}
     };
     private static final double W = 600, H = 430;
+    private static final double DRAWER_W = 252;
 
     private final SimulationEngine engine;
     private final Region root;
@@ -117,6 +135,15 @@ public final class MapPanel {
     private ProgressBar unrestBar;
     private Label unrestLabel;
 
+    // --- command drawer state ---
+    private Sector selected = null;
+    private VBox drawer;
+    private Label dTitle, dSub, dEnviron, dWater, dWorksNote;
+    private final Label[] workState = new Label[WorkType.values().length];
+    private final Button[] workBtn = new Button[WorkType.values().length];
+    private final ProgressBar[] workBar = new ProgressBar[WorkType.values().length];
+    private TranslateTransition drawerSlide;
+
     private MapPanel(SimulationEngine engine) {
         this.engine = engine;
         this.geo = engine.getWorld().geography;
@@ -124,7 +151,6 @@ public final class MapPanel {
         startRefresh();
     }
 
-    // strip the leading "the " so labels read "Northern Reach", not "the Northern Reach"
     private static String shortName(String region) {
         if (region == null) return "";
         return region.startsWith("the ") ? region.substring(4) : region;
@@ -160,9 +186,14 @@ public final class MapPanel {
         hud.setPadding(new Insets(6, 0, 8, 4));
 
         Pane canvas = buildCanvas();
-        StackPane canvasHost = new StackPane(canvas);
+        buildDrawer();
+        StackPane canvasHost = new StackPane(canvas, drawer);
+        StackPane.setAlignment(drawer, Pos.CENTER_RIGHT);
         canvasHost.setStyle("-fx-background-color: #12130e; -fx-background-radius: 8;");
         canvasHost.setPadding(new Insets(6));
+        // clip the drawer's off-screen rest position so it doesn't widen the panel
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(W + 12, H + 12);
+        canvasHost.setClip(clip);
 
         ramp = new Region();
         ramp.setPrefSize(180, 9);
@@ -173,14 +204,14 @@ public final class MapPanel {
         legend.setAlignment(Pos.CENTER_LEFT);
         legend.setPadding(new Insets(8, 4, 0, 4));
 
-        readout = new Label("A hand-drawn survey  \u00b7  click any territory to inspect it");
+        readout = new Label("A hand-drawn survey  \u00b7  click any territory to command it");
         readout.setStyle("-fx-text-fill: #c3b78f; -fx-font-size: 12px; -fx-padding: 8 4 0 4;");
 
         VBox box = new VBox(4, bar, hud, canvasHost, legend, readout);
         box.setPadding(new Insets(14));
         box.setStyle("-fx-background-color: #191b16; -fx-border-color: #3a3a2c; -fx-border-radius: 12; -fx-background-radius: 12;");
         box.setMaxWidth(640);
-        applyMetricVisuals();
+        applyMetricVisuals(false);
         return box;
     }
 
@@ -228,16 +259,31 @@ public final class MapPanel {
         ring.setStroke(Color.web("#0d0e0a")); ring.setStrokeWidth(1.5);
         c.getChildren().add(ring);
         c.getChildren().add(glyph("\u2605", cap.cx, cap.cy - 3, 15, Color.web("#2a230a"), false));
+        // the capital's heartbeat - slow, regal
+        ScaleTransition beat = new ScaleTransition(Duration.seconds(2.2), ring);
+        beat.setFromX(1.0); beat.setFromY(1.0);
+        beat.setToX(1.12);  beat.setToY(1.12);
+        beat.setAutoReverse(true);
+        beat.setCycleCount(Animation.INDEFINITE);
+        beat.play();
 
         for (Sector s : sectors) {
             if (s.capital) {
                 c.getChildren().add(label("The Imperial Seat", s.cx, s.cy + 16, 11, true));
-                continue;                       // no compass tag, no metric badge
+                continue;
             }
             c.getChildren().add(label(s.dir, s.cx, s.cy - 4, 12, true));
             c.getChildren().add(label(s.region, s.cx, s.cy + 9, 10, false));
             s.badge = label("", s.cx, s.cy + 26, 14, true);
             c.getChildren().add(s.badge);
+        }
+
+        // flood overlays + weather + structure glyphs sit ABOVE the labels
+        for (Sector s : sectors) {
+            if (s.capital) continue;
+            addFloodOverlay(c, s);
+            addWeather(c, s);
+            addWorkGlyphs(c, s);
         }
 
         Circle rose = new Circle(560, 404, 14, Color.TRANSPARENT);
@@ -267,9 +313,10 @@ public final class MapPanel {
 
         if (cap) {
             p.setFill(Color.web("#5b5236"));     // fixed stone-and-gold; never tinted
+            p.setOnMouseClicked(ev -> closeDrawer());
         } else {
-            p.setOnMouseClicked(ev -> showReadout(s));
-            p.setOnMouseEntered(ev -> p.setOpacity(0.85));
+            p.setOnMouseClicked(ev -> selectSector(s));
+            p.setOnMouseEntered(ev -> { if (s != selected) p.setOpacity(0.85); });
             p.setOnMouseExited(ev -> p.setOpacity(1.0));
         }
         sectors.add(s);
@@ -291,23 +338,242 @@ public final class MapPanel {
         flow.play();
     }
 
+    // ------------------------------------------------------- ambient visuals
+    // A translucent water sheet over the sector that pulses while it's flooded.
+    private void addFloodOverlay(Pane c, Sector s) {
+        Polygon overlay = new Polygon(s.poly.getPoints().stream().mapToDouble(Double::doubleValue).toArray());
+        overlay.setFill(Color.web("#3f8ac9", 0.30));
+        overlay.setStroke(null);
+        overlay.setMouseTransparent(true);
+        overlay.setVisible(false);
+        s.floodOverlay = overlay;
+        FadeTransition pulse = new FadeTransition(Duration.seconds(1.4), overlay);
+        pulse.setFromValue(0.12); pulse.setToValue(0.45);
+        pulse.setAutoReverse(true);
+        pulse.setCycleCount(Animation.INDEFINITE);
+        s.floodPulse = pulse;
+        c.getChildren().add(overlay);
+    }
+
+    // Three falling streaks per sector: blue drizzle in rain, white drift in snow.
+    private void addWeather(Pane c, Sector s) {
+        Group g = new Group();
+        for (int i = 0; i < 3; i++) {
+            double x = s.cx - 26 + i * 24 + (i % 2) * 5;
+            Line streak = new Line(x, s.cy - 30, x - 3, s.cy - 18);
+            streak.setStrokeWidth(1.6);
+            streak.setStroke(Color.web("#7fb4e0", 0.7));
+            streak.setStrokeLineCap(StrokeLineCap.ROUND);
+            g.getChildren().add(streak);
+        }
+        g.setMouseTransparent(true);
+        g.setVisible(false);
+        TranslateTransition fall = new TranslateTransition(Duration.seconds(0.9), g);
+        fall.setFromY(0); fall.setToY(26);
+        fall.setCycleCount(Animation.INDEFINITE);
+        fall.play();
+        FadeTransition fade = new FadeTransition(Duration.seconds(0.9), g);
+        fade.setFromValue(0.9); fade.setToValue(0.0);
+        fade.setCycleCount(Animation.INDEFINITE);
+        fade.play();
+        s.weather = g;
+        c.getChildren().add(g);
+    }
+
+    // Small structure glyphs in the sector's lower-left: levee, irrigation, granary.
+    private void addWorkGlyphs(Pane c, Sector s) {
+        String[] icons = { "\u2630", "\u2248", "\u2302" };   // levee bars, water waves, house
+        for (int t = 0; t < WorkType.values().length; t++) {
+            Text g = glyph(icons[t], s.cx - 22 + t * 22, s.cy + 42, 13, Color.web("#e3d5a8", 0.95), true);
+            g.setEffect(new DropShadow(3, Color.web("#000", 0.8)));
+            g.setMouseTransparent(true);
+            g.setVisible(false);
+            s.workGlyphs[t] = g;
+            c.getChildren().add(g);
+        }
+    }
+
+    // ------------------------------------------------------ command drawer
+    private void buildDrawer() {
+        dTitle = new Label();
+        dTitle.setStyle("-fx-text-fill:#e3d5a8; -fx-font-family:'Georgia'; -fx-font-size:15px; -fx-font-weight:bold;");
+        dSub = new Label();
+        dSub.setStyle("-fx-text-fill:#bcb39a; -fx-font-style:italic; -fx-font-size:11px;");
+        Button close = new Button("\u2715");
+        close.setStyle("-fx-background-color:transparent; -fx-text-fill:#8c8460; -fx-font-size:12px; -fx-cursor:hand;");
+        close.setOnAction(e -> closeDrawer());
+        Region spring = new Region();
+        HBox.setHgrow(spring, Priority.ALWAYS);
+        HBox head = new HBox(6, new VBox(1, dTitle, dSub), spring, close);
+        head.setAlignment(Pos.TOP_LEFT);
+
+        dEnviron = new Label();
+        dEnviron.setWrapText(true);
+        dEnviron.setStyle("-fx-text-fill:#d8d2bd; -fx-font-size:11px;");
+        dWater = new Label();
+        dWater.setWrapText(true);
+        dWater.setStyle("-fx-text-fill:#9fc2dd; -fx-font-size:11px;");
+
+        Label worksTitle = new Label("PUBLIC WORKS");
+        worksTitle.setStyle("-fx-text-fill:#c3b78f; -fx-font-size:10px; -fx-padding:6 0 0 0;");
+        dWorksNote = new Label();
+        dWorksNote.setStyle("-fx-text-fill:#8c8460; -fx-font-size:10px;");
+
+        VBox works = new VBox(8);
+        WorkType[] types = WorkType.values();
+        for (int t = 0; t < types.length; t++) {
+            final WorkType w = types[t];
+            Label name = new Label(w.title + "   " + costText(w));
+            name.setStyle("-fx-text-fill:#eaeaea; -fx-font-size:11px; -fx-font-weight:bold;");
+            Label desc = new Label(w.description);
+            desc.setWrapText(true);
+            desc.setStyle("-fx-text-fill:#8a8a8a; -fx-font-size:10px;");
+
+            workState[t] = new Label();
+            workState[t].setStyle("-fx-text-fill:#e8c14a; -fx-font-size:10px;");
+            workBar[t] = new ProgressBar(0);
+            workBar[t].setPrefWidth(110);
+            workBar[t].setMinHeight(9);
+            workBar[t].setStyle("-fx-accent:#a89a5c;");
+            workBtn[t] = new Button("Build");
+            workBtn[t].setOnAction(e -> orderWork(w));
+
+            HBox stateRow = new HBox(8, workBtn[t], workBar[t], workState[t]);
+            stateRow.setAlignment(Pos.CENTER_LEFT);
+            VBox row = new VBox(3, name, desc, stateRow);
+            row.setPadding(new Insets(6));
+            row.setStyle("-fx-background-color:#1f211a; -fx-background-radius:6;");
+            works.getChildren().add(row);
+        }
+
+        drawer = new VBox(8, head, dEnviron, dWater, worksTitle, works, dWorksNote);
+        drawer.setPadding(new Insets(12));
+        drawer.setPrefWidth(DRAWER_W);
+        drawer.setMaxWidth(DRAWER_W);
+        drawer.setMaxHeight(H);
+        drawer.setStyle("-fx-background-color:#191b16ee; -fx-border-color:#3a3a2c; "
+                + "-fx-border-radius:10 0 0 10; -fx-background-radius:10 0 0 10;");
+        drawer.setTranslateX(DRAWER_W + 20);     // resting off-canvas
+
+        drawerSlide = new TranslateTransition(Duration.millis(260), drawer);
+    }
+
+    private static String costText(WorkType w) {
+        StringBuilder b = new StringBuilder("(");
+        if (w.wood > 0)  b.append(w.wood).append("w ");
+        if (w.stone > 0) b.append(w.stone).append("s ");
+        if (w.gold > 0)  b.append(w.gold).append("g ");
+        b.setLength(b.length() - 1);
+        return b.append(", ").append(w.days).append("d)").toString();
+    }
+
+    private void selectSector(Sector s) {
+        if (selected != null && selected != s) clearHighlight(selected);
+        selected = s;
+        s.poly.setOpacity(1.0);
+        s.poly.setStroke(Color.web("#e8c14a"));
+        s.poly.setStrokeWidth(3);
+        s.poly.setEffect(new DropShadow(14, Color.web("#e8c14a", 0.55)));
+        showReadout(s);
+        refreshDrawer();
+        drawerSlide.stop();
+        drawerSlide.setToX(0);
+        drawerSlide.play();
+    }
+
+    private void closeDrawer() {
+        if (selected != null) clearHighlight(selected);
+        selected = null;
+        drawerSlide.stop();
+        drawerSlide.setToX(DRAWER_W + 20);
+        drawerSlide.play();
+    }
+
+    private void clearHighlight(Sector s) {
+        s.poly.setStroke(Color.web("#0d0e0a"));
+        s.poly.setStrokeWidth(1.5);
+        s.poly.setEffect(null);
+    }
+
+    private void orderWork(WorkType w) {
+        if (selected == null || selected.id < 0) return;
+        Kingdom empire = engine.getKingdoms()[0];
+        engine.lock();
+        try { PublicWorksManager.start(empire, selected.id, w); }
+        finally { engine.unlock(); }
+        refresh();   // immediate feedback: button greys, bar appears
+    }
+
+    private void refreshDrawer() {
+        if (selected == null) return;
+        Sector s = selected;
+        dTitle.setText(s.dir + "  \u00b7  " + s.region);
+        dSub.setText(s.crop.isEmpty() ? "surveyed territory" : s.crop);
+        dEnviron.setText("Soil " + Math.round(s.soil) + "%   \u00b7   Yield " + Math.round(s.yield) + "%"
+                + "   \u00b7   " + Math.round(s.tempC) + "\u00b0C"
+                + "\nControl " + Math.round(s.control * 100) + "%");
+        dWater.setText("River " + Math.round(s.river * 100) + "%   \u00b7   Snowpack " + Math.round(s.snow * 100) + "%"
+                + "\nFlood " + Math.round(s.flood) + "%   \u00b7   Levee line +" + Math.round(s.levee * 100)
+                + (s.waterCond == null || s.waterCond.isEmpty() ? "" : "   \u00b7   " + s.waterCond));
+
+        Kingdom empire = engine.getKingdoms()[0];
+        WorkType[] types = WorkType.values();
+        boolean busy = PublicWorksManager.sectorBusy(s.id);
+        for (int t = 0; t < types.length; t++) {
+            PublicWorksManager.State st = PublicWorksManager.stateOf(s.id, types[t]);
+            switch (st) {
+                case BUILT:
+                    workBtn[t].setVisible(false); workBtn[t].setManaged(false);
+                    workBar[t].setVisible(false); workBar[t].setManaged(false);
+                    workState[t].setText("\u2713 standing");
+                    workState[t].setStyle("-fx-text-fill:#5fd17a; -fx-font-size:10px; -fx-font-weight:bold;");
+                    break;
+                case BUILDING:
+                    workBtn[t].setVisible(false); workBtn[t].setManaged(false);
+                    workBar[t].setVisible(true); workBar[t].setManaged(true);
+                    workBar[t].setProgress(PublicWorksManager.progressOf(s.id, types[t]));
+                    workState[t].setText(PublicWorksManager.daysLeftOf(s.id, types[t]) + "d left");
+                    workState[t].setStyle("-fx-text-fill:#e8c14a; -fx-font-size:10px;");
+                    break;
+                default:
+                    workBar[t].setVisible(false); workBar[t].setManaged(false);
+                    workBtn[t].setVisible(true); workBtn[t].setManaged(true);
+                    boolean can = PublicWorksManager.canStart(empire, s.id, types[t]);
+                    workBtn[t].setDisable(!can);
+                    workBtn[t].setStyle("-fx-font-size:10px; -fx-background-radius:5; -fx-padding:3 10; -fx-cursor:hand; "
+                            + "-fx-text-fill:white; -fx-background-color:" + (can ? "#1f7a3f" : "#3a3a3a") + ";");
+                    workState[t].setText(busy ? "" : (can ? "" : "can't afford"));
+                    workState[t].setStyle("-fx-text-fill:#8a5a5a; -fx-font-size:10px;");
+            }
+        }
+        dWorksNote.setText(busy ? "Workers are already raising something here."
+                : "One project per territory at a time.");
+    }
+
     // ------------------------------------------------------------------ logic
     private void selectMetric(Metric m) {
         current = m;
         for (int i = 0; i < metricButtons.size(); i++)
             styleToggle(metricButtons.get(i), Metric.values()[i] == m);
-        applyMetricVisuals();
+        applyMetricVisuals(true);
     }
 
-    private void applyMetricVisuals() {
+    private void applyMetricVisuals(boolean animate) {
         for (Sector s : sectors) {
-            if (s.capital) continue;            // the Imperial Seat is never tinted
+            if (s.capital) continue;
             double v = s.value(current);
             double t;
             if (current == Metric.HEAT) t = (v - HEAT_LO) / (HEAT_HI - HEAT_LO);
-            else if (current == Metric.CONTROL) t = (v + 1) / 2.0;   // -1..+1 -> 0..1
+            else if (current == Metric.CONTROL) t = (v + 1) / 2.0;
             else t = v / 100.0;
-            s.poly.setFill(current.lo.interpolate(current.hi, clamp01(t)));
+            Color target = current.lo.interpolate(current.hi, clamp01(t));
+            if (animate && s.poly.getFill() instanceof Color) {
+                FillTransition ft = new FillTransition(Duration.millis(420), s.poly,
+                        (Color) s.poly.getFill(), target);
+                ft.play();
+            } else {
+                s.poly.setFill(target);
+            }
             if (s.badge != null)
                 s.badge.setText(current == Metric.CONTROL
                         ? Math.round(v * 100) + ""
@@ -339,33 +605,67 @@ public final class MapPanel {
     private void refresh() {
         engine.lock();
         try { sampleWorld(); } finally { engine.unlock(); }
-        applyMetricVisuals();
+        applyMetricVisuals(false);
+        applyAmbientVisuals();
+        if (selected != null) { showReadout(selected); refreshDrawer(); }
     }
 
-    /** The single data tap -- now fully LIVE off the world systems. */
+    /** The single data tap -- fully LIVE off the world systems. */
     private void sampleWorld() {
-        // --- empire unrest ---
         Kingdom empire = engine.getKingdoms()[0];
         double unrest = empire.unrestLevel;
-        double frac = clamp01(unrest / 2500.0);            // ~ PoliticsConfig.UNREST_FULL_SCALE
+        double frac = clamp01(unrest / 2500.0);
         unrestBar.setProgress(frac);
         unrestLabel.setText((int) unrest + "  \u00b7  " + ConflictManager.stateOf(empire));
         String accent = frac > 0.8 ? "#c0392b" : frac > 0.4 ? "#d98a2b" : "#5a9e4a";
         unrestBar.setStyle("-fx-accent: " + accent + ";");
 
-        // --- per-sector environment (real arrays, indexed by sector id) ---
         World w = engine.getWorld();
         Agriculture ag = w.agriculture;
         Water wa = w.water;
         Climate cl = w.climate;
         for (Sector s : sectors) {
-            if (s.id < 0) continue;                        // capital has no sector data
+            if (s.id < 0) continue;
             s.soil  = ag.soilMoisture[s.id] * 100.0;
             s.yield = ag.yield[s.id]        * 100.0;
             s.crop  = ag.cropState[s.id];
             s.flood = wa.floodSeverity[s.id] * 100.0;
+            s.river = wa.riverLevel[s.id];
+            s.snow  = wa.snowpack[s.id];
+            s.levee = wa.leveeHeight[s.id];
+            s.waterCond = wa.condition[s.id];
             s.tempC = cl.temperature[s.id];
+            s.precip = cl.precipitation[s.id];
             s.control = ConflictManager.sectorControl(s.id);
+        }
+    }
+
+    // Flood pulses, falling weather, and structure glyphs - driven by the sample.
+    private void applyAmbientVisuals() {
+        for (Sector s : sectors) {
+            if (s.capital) continue;
+
+            boolean flooded = s.flood > 35;
+            if (flooded && !s.floodOverlay.isVisible()) {
+                s.floodOverlay.setVisible(true);
+                s.floodPulse.play();
+            } else if (!flooded && s.floodOverlay.isVisible()) {
+                s.floodPulse.stop();
+                s.floodOverlay.setVisible(false);
+            }
+
+            boolean wet = s.precip > 0.45;
+            s.weather.setVisible(wet);
+            if (wet) {
+                Color streak = s.tempC < 0 ? Color.web("#e8eef4", 0.85) : Color.web("#7fb4e0", 0.7);
+                for (javafx.scene.Node n : s.weather.getChildren())
+                    if (n instanceof Line) ((Line) n).setStroke(streak);
+            }
+
+            WorkType[] types = WorkType.values();
+            for (int t = 0; t < types.length; t++)
+                s.workGlyphs[t].setVisible(
+                        PublicWorksManager.stateOf(s.id, types[t]) == PublicWorksManager.State.BUILT);
         }
     }
 
